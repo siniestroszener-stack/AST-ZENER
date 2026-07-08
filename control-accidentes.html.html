@@ -1,0 +1,2557 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title>Control de Accidentes SST</title>
+  <script src="https://accounts.google.com/gsi/client"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script>
+    /* =====================================================================
+       CONFIGURACIÓN — edita estos 4 valores para tu cuenta/planilla/carpeta.
+       Este archivo es autocontenido: toda la configuración vive aquí, no
+       hay variables de entorno ni backend. Instrucciones completas de cómo
+       obtener cada valor están al final de este archivo, en el bloque
+       "GUIA_CONFIGURACION" (búscalo con Ctrl+F), y también aparecen dentro
+       de la app la primera vez que la abres si falta algún dato.
+       ===================================================================== */
+    const CONFIG = {
+      // Client ID de OAuth 2.0 (tipo "Aplicación web") creado en Google Cloud
+      // Console para el proyecto donde habilitaste Sheets API y Drive API.
+      CLIENT_ID: '1062246310358-avg5cag54h3lffcpp8f9g9mgrf8a5e3k.apps.googleusercontent.com',
+
+      // ID de la planilla madre. Queda vacío la primera vez — usa el botón
+      // "Crear estructura inicial" dentro de la app (aparece automáticamente
+      // si esto está vacío) y pega aquí el ID que te muestre al terminar.
+      SPREADSHEET_ID: '',
+
+      // ID de la carpeta raíz en Drive. Igual que arriba: se completa con
+      // el mismo botón de configuración inicial.
+      ROOT_FOLDER_ID: '',
+
+      // Permisos que pide el login. spreadsheets = leer/escribir la planilla.
+      // drive = crear carpetas y archivos, y poder sobrescribir/exportar.
+      SCOPES: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive'
+    };
+  </script>
+  <style>
+  /* ─────────────────────────────────────────────────────────────
+     Sistema de diseño — Control de Accidentes SST
+     Paleta inspirada en herramientas de control técnico/industrial:
+     azul-grafito como base (autoridad, calma), naranja de seguridad
+     como acento (color estándar de EPP/señalización en terreno).
+     Tipografía IBM Plex: familia técnica y legible, con una variante
+     mono para identificadores (ID de caso, RUT, folios) — encuentra
+     visualmente la diferencia entre "dato" y "prosa".
+     ───────────────────────────────────────────────────────────── */
+
+  :root {
+    --color-primario: #0B2A3E;
+    --color-primario-claro: #163C55;
+    --color-acento: #E4772E;
+    --color-acento-suave: #FBE7D6;
+
+    --bg: #F5F6F8;
+    --superficie: #FFFFFF;
+    --borde: #E1E5EA;
+
+    --texto: #1B2530;
+    --texto-secundario: #5C6B7A;
+    --texto-tenue: #8A97A3;
+
+    --estado-ok: #2F8659;
+    --estado-ok-bg: #E4F3EB;
+    --estado-alerta: #C4890F;
+    --estado-alerta-bg: #FBF0DB;
+    --estado-critico: #C4402D;
+    --estado-critico-bg: #FBE6E2;
+    --estado-info: #3D6E92;
+    --estado-info-bg: #E4EEF4;
+    --estado-neutro: #6B7684;
+    --estado-neutro-bg: #EBEDF0;
+
+    --radio: 8px;
+    --radio-chico: 5px;
+    --sombra: 0 1px 2px rgba(11, 42, 62, 0.06), 0 1px 8px rgba(11, 42, 62, 0.04);
+    --sombra-flotante: 0 8px 24px rgba(11, 42, 62, 0.14);
+
+    --fuente: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --fuente-condensada: 'IBM Plex Sans Condensed', var(--fuente);
+    --fuente-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--texto);
+    font-family: var(--fuente);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--fuente-condensada);
+    font-weight: 600;
+    margin: 0 0 4px 0;
+    color: var(--color-primario);
+    letter-spacing: 0.01em;
+  }
+  h1 { font-size: 22px; }
+  h2 { font-size: 18px; }
+  h3 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--texto-secundario); }
+
+  p { margin: 0 0 8px 0; }
+
+  a { color: var(--color-primario-claro); }
+
+  .mono { font-family: var(--fuente-mono); font-size: 13px; letter-spacing: -0.01em; }
+
+  button, input, select, textarea { font-family: inherit; font-size: inherit; }
+
+  /* ── Layout general ─────────────────────────────────────────── */
+
+  #app { display: flex; min-height: 100vh; }
+
+  #sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--color-primario);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 0;
+  }
+
+  #sidebar .marca {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 20px 20px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.12);
+    margin-bottom: 16px;
+  }
+  #sidebar .marca img { width: 32px; height: 32px; object-fit: contain; border-radius: 4px; background: #fff; }
+  #sidebar .marca-textos { display: flex; flex-direction: column; min-width: 0; }
+  #sidebar .marca-empresa { font-size: 12px; color: rgba(255,255,255,0.6); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #sidebar .marca-sistema { font-family: var(--fuente-condensada); font-weight: 600; font-size: 14px; color: #fff; }
+
+  #sidebar nav { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; }
+
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radio-chico);
+    color: rgba(255,255,255,0.75);
+    cursor: pointer;
+    font-size: 13.5px;
+    font-weight: 500;
+    transition: background 0.12s ease, color 0.12s ease;
+    user-select: none;
+  }
+  .nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  .nav-item.activo { background: var(--color-acento); color: #fff; }
+  .nav-item .icono { width: 16px; text-align: center; opacity: 0.9; }
+
+  #sidebar .usuario-actual {
+    margin-top: auto;
+    padding: 14px 20px;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    font-size: 12px;
+    color: rgba(255,255,255,0.65);
+  }
+  #sidebar .usuario-actual .u-nombre { color: #fff; font-weight: 600; display: block; margin-bottom: 2px; }
+  #sidebar .usuario-actual .u-rol {
+    display: inline-block; margin-top: 4px;
+    background: rgba(255,255,255,0.12); color: #fff;
+    padding: 2px 8px; border-radius: 20px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em;
+  }
+
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  #topbar {
+    height: 56px; flex-shrink: 0;
+    background: var(--superficie);
+    border-bottom: 1px solid var(--borde);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px;
+  }
+  #topbar h1 { margin: 0; }
+
+  #contenido { flex: 1; padding: 24px; overflow-y: auto; }
+
+  .vista { display: none; }
+  .vista.activa { display: block; animation: aparecer 0.15s ease; }
+  @keyframes aparecer { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ── Componentes ────────────────────────────────────────────── */
+
+  .tarjeta {
+    background: var(--superficie);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio);
+    box-shadow: var(--sombra);
+    padding: 18px 20px;
+  }
+
+  .grid-kpi { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; margin-bottom: 24px; }
+  @media (max-width: 1100px) { .grid-kpi { grid-template-columns: repeat(3, 1fr); } }
+
+  .kpi { padding: 16px 18px; border-left: 3px solid var(--color-acento); }
+  .kpi .kpi-valor { font-family: var(--fuente-condensada); font-size: 30px; font-weight: 600; color: var(--color-primario); line-height: 1; }
+  .kpi .kpi-etiqueta { margin-top: 6px; font-size: 12px; color: var(--texto-secundario); text-transform: uppercase; letter-spacing: 0.03em; }
+  .kpi.critico { border-left-color: var(--estado-critico); }
+  .kpi.critico .kpi-valor { color: var(--estado-critico); }
+  .kpi.alerta { border-left-color: var(--estado-alerta); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  .pill-ok { background: var(--estado-ok-bg); color: var(--estado-ok); }
+  .pill-alerta { background: var(--estado-alerta-bg); color: var(--estado-alerta); }
+  .pill-critico { background: var(--estado-critico-bg); color: var(--estado-critico); }
+  .pill-info { background: var(--estado-info-bg); color: var(--estado-info); }
+  .pill-neutro { background: var(--estado-neutro-bg); color: var(--estado-neutro); }
+
+  table.tabla { width: 100%; border-collapse: collapse; }
+  table.tabla th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--texto-secundario); font-weight: 600;
+    padding: 10px 12px; border-bottom: 2px solid var(--borde);
+  }
+  table.tabla td { padding: 11px 12px; border-bottom: 1px solid var(--borde); font-size: 13.5px; vertical-align: middle; }
+  table.tabla tbody tr { cursor: pointer; transition: background 0.1s ease; }
+  table.tabla tbody tr:hover { background: #FAFBFC; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: var(--radio-chico);
+    border: 1px solid transparent;
+    font-weight: 600; font-size: 13px; cursor: pointer;
+    transition: filter 0.12s ease, background 0.12s ease;
+  }
+  .btn:active { filter: brightness(0.94); }
+  .btn-primario { background: var(--color-acento); color: #fff; }
+  .btn-primario:hover { background: #D1691F; }
+  .btn-secundario { background: var(--superficie); color: var(--color-primario); border-color: var(--borde); }
+  .btn-secundario:hover { background: #F1F3F5; }
+  .btn-texto { background: transparent; color: var(--color-primario-claro); padding: 6px 8px; }
+  .btn-texto:hover { text-decoration: underline; }
+  .btn-peligro { background: var(--estado-critico-bg); color: var(--estado-critico); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 18px; }
+  @media (max-width: 900px) { .form-grid { grid-template-columns: repeat(2, 1fr); } }
+
+  .campo { display: flex; flex-direction: column; gap: 5px; }
+  .campo.span-2 { grid-column: span 2; }
+  .campo.span-3 { grid-column: span 3; }
+  .campo label { font-size: 12px; font-weight: 600; color: var(--texto-secundario); }
+  .campo input, .campo select, .campo textarea {
+    padding: 8px 10px; border: 1px solid var(--borde); border-radius: var(--radio-chico);
+    background: var(--superficie); color: var(--texto);
+  }
+  .campo input:focus, .campo select:focus, .campo textarea:focus {
+    outline: none; border-color: var(--color-acento); box-shadow: 0 0 0 3px var(--color-acento-suave);
+  }
+  .campo textarea { resize: vertical; min-height: 70px; }
+
+  .seccion-titulo {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 28px 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid var(--borde);
+  }
+  .seccion-titulo:first-child { margin-top: 0; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--borde); margin-bottom: 18px; }
+  .tab {
+    padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--texto-secundario);
+    cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--texto); }
+  .tab.activo { color: var(--color-primario); border-bottom-color: var(--color-acento); }
+
+  .checklist-categoria { margin-bottom: 22px; }
+  .checklist-categoria-header {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--fuente-condensada); font-weight: 600; font-size: 13px;
+    color: var(--color-primario); text-transform: uppercase; letter-spacing: 0.03em;
+    padding-bottom: 6px; margin-bottom: 8px; border-bottom: 1px solid var(--borde);
+  }
+  .checklist-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 4px; border-bottom: 1px solid #F0F2F4;
+  }
+  .checklist-item:last-child { border-bottom: none; }
+  .checklist-item .ci-nombre { flex: 1; min-width: 0; }
+  .checklist-item .ci-condicion { font-size: 11.5px; color: var(--texto-tenue); font-style: italic; }
+  .checklist-item .ci-acciones { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+  .barra-progreso { height: 6px; border-radius: 4px; background: var(--estado-neutro-bg); overflow: hidden; }
+  .barra-progreso-relleno { height: 100%; background: var(--estado-ok); transition: width 0.2s ease; }
+
+  .vacio {
+    text-align: center; padding: 48px 20px; color: var(--texto-tenue);
+  }
+
+  .modal-fondo {
+    position: fixed; inset: 0; background: rgba(11, 42, 62, 0.35);
+    display: flex; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal {
+    background: var(--superficie); border-radius: var(--radio); box-shadow: var(--sombra-flotante);
+    width: 480px; max-width: 92vw; max-height: 88vh; overflow-y: auto; padding: 22px 24px;
+  }
+
+  .toast-contenedor { position: fixed; bottom: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    background: var(--color-primario); color: #fff; padding: 12px 18px; border-radius: var(--radio-chico);
+    box-shadow: var(--sombra-flotante); font-size: 13px; max-width: 340px; animation: aparecer 0.15s ease;
+  }
+  .toast.error { background: var(--estado-critico); }
+  .toast.exito { background: var(--estado-ok); }
+
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
+    border-radius: 50%; animation: girar 0.7s linear infinite; display: inline-block;
+  }
+  @keyframes girar { to { transform: rotate(360deg); } }
+
+  .filtros-barra { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  .filtros-barra input, .filtros-barra select {
+    padding: 7px 10px; border: 1px solid var(--borde); border-radius: var(--radio-chico); background: var(--superficie);
+  }
+
+  .zona-carga {
+    border: 1.5px dashed var(--borde); border-radius: var(--radio);
+    padding: 20px; text-align: center; color: var(--texto-secundario); font-size: 13px;
+    cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .zona-carga:hover { border-color: var(--color-acento); background: var(--color-acento-suave); }
+
+  .badge-version { font-family: var(--fuente-mono); font-size: 11px; color: var(--texto-tenue); }
+
+  /* ── Pantalla de acceso (login / setup / identificación) ─────── */
+  .pantalla-acceso {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--color-primario); padding: 20px;
+  }
+  .tarjeta-acceso {
+    background: var(--superficie); border-radius: var(--radio); box-shadow: var(--sombra-flotante);
+    width: 420px; max-width: 100%; padding: 32px 30px;
+  }
+  .tarjeta-acceso h1 { font-size: 19px; margin-bottom: 6px; }
+  .tarjeta-acceso p.subt { color: var(--texto-secundario); font-size: 13px; margin-bottom: 22px; }
+  .tarjeta-acceso .btn { width: 100%; justify-content: center; padding: 11px; font-size: 13.5px; margin-bottom: 8px; }
+  .lista-usuarios-acceso { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; margin-bottom: 14px; }
+  .item-usuario-acceso {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 12px; border: 1px solid var(--borde); border-radius: var(--radio-chico);
+    cursor: pointer; transition: border-color .12s ease, background .12s ease;
+  }
+  .item-usuario-acceso:hover { border-color: var(--color-acento); background: var(--color-acento-suave); }
+  .item-usuario-acceso .iu-nombre { font-weight: 600; font-size: 13px; }
+  .item-usuario-acceso .iu-email { font-size: 11.5px; color: var(--texto-tenue); }
+  .caja-ayuda { background: var(--bg); border: 1px solid var(--borde); border-radius: var(--radio-chico); padding: 12px 14px; font-size: 12px; color: var(--texto-secundario); margin-top: 14px; line-height: 1.6; }
+  .caja-ayuda code { background: var(--estado-neutro-bg); padding: 1px 5px; border-radius: 3px; font-family: var(--fuente-mono); }
+  .caja-id { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--borde); border-radius: var(--radio-chico); padding: 8px 10px; margin-bottom: 8px; }
+  .caja-id code { flex: 1; font-family: var(--fuente-mono); font-size: 12px; overflow-x: auto; white-space: nowrap; }
+</style>
+</head>
+<body>
+  <div id="pantalla-acceso" class="pantalla-acceso">
+    <div class="tarjeta-acceso" id="tarjeta-acceso"><!-- se pinta por JS: config pendiente / login / setup / identificación --></div>
+  </div>
+
+  <div id="app" style="display:none;">
+    <aside id="sidebar">
+      <div class="marca" id="sidebar-marca"></div>
+      <nav id="sidebar-nav"></nav>
+      <div class="usuario-actual" id="sidebar-usuario"></div>
+    </aside>
+
+    <div id="main">
+      <div id="topbar">
+        <h1 id="topbar-titulo">Cargando…</h1>
+      </div>
+      <div id="contenido">
+        <div class="vacio"><span class="spinner" style="border-top-color:var(--color-primario); border-color:var(--borde);"></span> Cargando sistema…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-contenedor" id="toast-contenedor"></div>
+
+  <!-- ── JavaScript.html ── -->
+  <script>
+  /* =====================================================================
+     Control de Accidentes SST — lógica de cliente
+     Todo el estado vive en memoria (variable `state`) y se repinta desde
+     cero en cada navegación — no hay framework, solo funciones que arman
+     HTML con template literals y lo inyectan en #contenido.
+     ===================================================================== */
+
+  var state = {
+    usuario: null,
+    config: {},
+    vista: 'dashboard',
+    casos: [],
+    filtrosCasos: { estado: '', cliente: '', gravedad: '', texto: '' },
+    casoActual: null,      // detalle completo del caso abierto (caso+medidas+documentos+historial)
+    tabCasoActual: 'datos',
+    usuarios: [],
+    ocrPendiente: null     // { base64, mimeType, nombre } — PDF usado para autocompletar, se archiva al guardar
+  };
+
+  var PERMISOS_CLIENTE = {
+    crear_caso: ['administrador', 'apr', 'supervisor'],
+    editar_caso: ['administrador', 'apr'],
+    cerrar_caso: ['administrador', 'apr'],
+    crear_medida: ['administrador', 'apr', 'supervisor'],
+    editar_medida: ['administrador', 'apr', 'supervisor'],
+    subir_documento: ['administrador', 'apr', 'supervisor'],
+    sobrescribir_documento: ['administrador', 'apr'],
+    gestionar_usuarios: ['administrador'],
+    exportar_csv: ['administrador', 'apr', 'supervisor']
+  };
+  function puede(accion) {
+    var lista = PERMISOS_CLIENTE[accion];
+    return !!(lista && state.usuario && lista.indexOf(state.usuario.rol) !== -1);
+  }
+
+  var REGIONES_CHILE = [
+    'Arica y Parinacota', 'Tarapacá', 'Antofagasta', 'Atacama', 'Coquimbo',
+    'Valparaíso', 'Metropolitana', "O'Higgins", 'Maule', 'Ñuble', 'Biobío',
+    'La Araucanía', 'Los Ríos', 'Los Lagos', 'Aysén', 'Magallanes'
+  ];
+  var CLIENTES_SUGERIDOS = ['CLARO', 'ENTEL', 'INFRACO', 'ONNET', 'VTR'];
+
+  // ── Arranque ───────────────────────────────────────────────────────────
+
+  document.addEventListener('DOMContentLoaded', function () {
+    if (!CONFIG.CLIENT_ID || CONFIG.CLIENT_ID.indexOf('PEGA_AQUI') === 0) {
+      return mostrarPantallaConfigPendiente_();
+    }
+    initGis_();
+    mostrarPantallaLogin_();
+  });
+
+  function pintarShell() {
+    var logo = state.config.LOGO_URL
+      ? '<img src="' + state.config.LOGO_URL + '" alt="logo">'
+      : '<div style="width:32px;height:32px;border-radius:4px;background:var(--color-acento);"></div>';
+
+    document.getElementById('sidebar-marca').innerHTML =
+      logo +
+      '<div class="marca-textos">' +
+        '<span class="marca-empresa">' + escapeHtml(state.config.NOMBRE_EMPRESA || '') + '</span>' +
+        '<span class="marca-sistema">' + escapeHtml(state.config.NOMBRE_SISTEMA || 'Control de Accidentes SST') + '</span>' +
+      '</div>';
+
+    var nav = [
+      { v: 'dashboard', icono: '&#9632;', label: 'Dashboard' },
+      { v: 'casos', icono: '&#9776;', label: 'Casos' }
+    ];
+    if (puede('crear_caso')) nav.push({ v: 'nuevo-caso', icono: '&#43;', label: 'Nuevo caso' });
+    if (puede('gestionar_usuarios')) nav.push({ v: 'usuarios', icono: '&#9782;', label: 'Usuarios' });
+
+    document.getElementById('sidebar-nav').innerHTML = nav.map(function (n) {
+      return '<div class="nav-item" data-vista="' + n.v + '" onclick="navegarA(\'' + n.v + '\')">' +
+        '<span class="icono">' + n.icono + '</span>' + n.label + '</div>';
+    }).join('');
+
+    document.getElementById('sidebar-usuario').innerHTML =
+      '<span class="u-nombre">' + escapeHtml(state.usuario.nombre) + '</span>' +
+      escapeHtml(state.usuario.email) +
+      '<div class="u-rol">' + escapeHtml(state.usuario.rol.replace('_', ' ')) + '</div>' +
+      '<div style="margin-top:8px;"><a href="#" onclick="cambiarUsuario_(); return false;" style="color:rgba(255,255,255,0.55); font-size:11px;">Cambiar usuario</a></div>';
+  }
+
+  // ── Navegación ─────────────────────────────────────────────────────────
+
+  function navegarA(vista, param) {
+    state.vista = vista;
+    document.querySelectorAll('.nav-item').forEach(function (el) {
+      el.classList.toggle('activo', el.getAttribute('data-vista') === vista);
+    });
+
+    if (vista === 'dashboard') return cargarDashboard();
+    if (vista === 'casos') return cargarCasos();
+    if (vista === 'nuevo-caso') return renderNuevoCaso();
+    if (vista === 'caso-detalle') return cargarCasoDetalle(param);
+    if (vista === 'usuarios') return cargarUsuarios();
+  }
+
+  function elContenido() { return document.getElementById('contenido'); }
+  function elTopbarTitulo(t) { document.getElementById('topbar-titulo').textContent = t; }
+
+  // ── Utilidades de llamada a los servicios (REST directo a Sheets/Drive) ─
+
+  function llamar(nombreFuncion) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    var fn = SERVICIOS[nombreFuncion];
+    if (!fn) return Promise.reject(new Error('Servicio no implementado: ' + nombreFuncion));
+    return Promise.resolve().then(function () { return fn.apply(null, args); });
+  }
+
+  function mostrarToast(mensaje, tipo) {
+    var cont = document.getElementById('toast-contenedor');
+    var el = document.createElement('div');
+    el.className = 'toast' + (tipo ? ' ' + tipo : '');
+    el.textContent = mensaje;
+    cont.appendChild(el);
+    setTimeout(function () { el.remove(); }, 4500);
+  }
+
+  function mostrarError(err) {
+    mostrarToast(typeof err === 'string' ? err : (err && err.message) || 'Ocurrió un error inesperado.', 'error');
+  }
+
+  function conSpinner(boton, promesa) {
+    var textoOriginal = boton.innerHTML;
+    boton.disabled = true;
+    boton.innerHTML = '<span class="spinner"></span> Procesando…';
+    return promesa.finally(function () {
+      boton.disabled = false;
+      boton.innerHTML = textoOriginal;
+    });
+  }
+
+  function escapeHtml(t) {
+    if (t === null || t === undefined) return '';
+    return String(t).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function leerArchivoBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var base64 = reader.result.split(',')[1];
+        resolve({ base64: base64, mimeType: file.type, nombre: file.name });
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function confirmarAccion(mensaje) {
+    return new Promise(function (resolve) {
+      var fondo = document.createElement('div');
+      fondo.className = 'modal-fondo';
+      fondo.innerHTML =
+        '<div class="modal" style="width:380px;">' +
+          '<h2>Confirmar</h2><p>' + escapeHtml(mensaje) + '</p>' +
+          '<div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">' +
+            '<button class="btn btn-secundario" id="conf-no">Cancelar</button>' +
+            '<button class="btn btn-primario" id="conf-si">Confirmar</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(fondo);
+      fondo.querySelector('#conf-no').onclick = function () { fondo.remove(); resolve(false); };
+      fondo.querySelector('#conf-si').onclick = function () { fondo.remove(); resolve(true); };
+    });
+  }
+
+  function cerrarModal() {
+    var m = document.querySelector('.modal-fondo');
+    if (m) m.remove();
+  }
+
+  function pillEstadoCaso(estado) {
+    var mapa = {
+      abierto: ['pill-info', 'Abierto'],
+      en_investigacion: ['pill-alerta', 'En investigación'],
+      cerrado: ['pill-ok', 'Cerrado']
+    };
+    var v = mapa[estado] || ['pill-neutro', estado];
+    return '<span class="pill ' + v[0] + '">' + v[1] + '</span>';
+  }
+
+  function pillGravedad(g) {
+    var mapa = {
+      LEVE: ['pill-neutro', 'Leve'],
+      GRAVE: ['pill-alerta', 'Grave · MINSAL-NT142'],
+      FATAL: ['pill-critico', 'Fatal']
+    };
+    var v = mapa[g] || ['pill-neutro', g || '—'];
+    return '<span class="pill ' + v[0] + '">' + v[1] + '</span>';
+  }
+
+  function pillEstadoMedida(estado) {
+    var mapa = {
+      abierta: ['pill-info', 'Abierta'],
+      en_curso: ['pill-alerta', 'En curso'],
+      cerrada: ['pill-ok', 'Cerrada'],
+      vencida: ['pill-critico', 'Vencida']
+    };
+    var v = mapa[estado] || ['pill-neutro', estado];
+    return '<span class="pill ' + v[0] + '">' + v[1] + '</span>';
+  }
+
+  function pillEstadoDoc(estado) {
+    var mapa = {
+      pendiente: ['pill-alerta', 'Pendiente'],
+      cargado: ['pill-ok', 'Cargado'],
+      no_aplica: ['pill-neutro', 'No aplica']
+    };
+    var v = mapa[estado] || ['pill-neutro', estado];
+    return '<span class="pill ' + v[0] + '">' + v[1] + '</span>';
+  }
+</script>
+
+  <!-- ── AUTH + SETUP (nuevo, reemplaza Apps Script) ── -->
+<script>
+  /* =====================================================================
+     AUTENTICACIÓN + CONFIGURACIÓN INICIAL + CAPA DE SERVICIOS
+     Reemplaza por completo a Apps Script: aquí se habla directo con
+     Sheets API v4 y Drive API v3 vía REST, usando un token OAuth 2.0
+     obtenido con Google Identity Services (GIS). No hay servidor propio.
+     ===================================================================== */
+
+  var API_SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
+  var API_DRIVE = 'https://www.googleapis.com/drive/v3';
+  var API_DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
+
+  var tokenClient = null;
+  var accessToken = null;
+
+  // ── Google Identity Services ────────────────────────────────────────
+
+  function initGis_() {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CONFIG.CLIENT_ID,
+      scope: CONFIG.SCOPES,
+      callback: function (resp) {
+        if (resp.error) {
+          mostrarErrorAcceso_('No se pudo iniciar sesión con Google: ' + resp.error);
+          return;
+        }
+        accessToken = resp.access_token;
+        onLoginExitoso_();
+      }
+    });
+  }
+
+  function login_() {
+    tokenClient.requestAccessToken({ prompt: 'consent' });
+  }
+
+  function reautenticarSilencioso_() {
+    return new Promise(function (resolve, reject) {
+      tokenClient.callback = function (resp) {
+        if (resp.error) { reject(new Error(resp.error)); return; }
+        accessToken = resp.access_token;
+        resolve();
+      };
+      tokenClient.requestAccessToken({ prompt: '' });
+    });
+  }
+
+  // Envoltorio de fetch: agrega el token, reintenta una vez si expiró (401).
+  function apiFetch_(url, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ 'Authorization': 'Bearer ' + accessToken }, opts.headers || {});
+    return fetch(url, opts).then(function (resp) {
+      if (resp.status === 401) {
+        return reautenticarSilencioso_().then(function () {
+          opts.headers['Authorization'] = 'Bearer ' + accessToken;
+          return fetch(url, opts);
+        });
+      }
+      return resp;
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.text().then(function (texto) {
+          throw new Error('Error API (' + resp.status + '): ' + texto.substring(0, 300));
+        });
+      }
+      return resp;
+    });
+  }
+
+  // ── Pantallas de acceso ─────────────────────────────────────────────
+
+  function tarjetaAcceso_() { return document.getElementById('tarjeta-acceso'); }
+
+  function mostrarPantallaConfigPendiente_() {
+    tarjetaAcceso_().innerHTML =
+      '<h1>Falta configurar este archivo</h1>' +
+      '<p class="subt">Antes de abrir el sistema, edita el bloque <code>CONFIG</code> al inicio de este mismo archivo HTML.</p>' +
+      '<div class="caja-ayuda">' +
+        'Falta <code>CLIENT_ID</code>. Búscalo en Google Cloud Console → Credenciales → tu Client ID de OAuth 2.0 ' +
+        '(tipo "Aplicación web"). Pégalo en <code>CONFIG.CLIENT_ID</code>, guarda el archivo y vuelve a abrirlo.<br><br>' +
+        'Si aún no creaste el Client ID, revisa las instrucciones al final de este archivo (busca <code>GUIA_CONFIGURACION</code>).' +
+      '</div>';
+  }
+
+  function mostrarPantallaLogin_() {
+    tarjetaAcceso_().innerHTML =
+      '<h1>Control de Accidentes SST</h1>' +
+      '<p class="subt">Conéctate con la cuenta de Google que tiene acceso a la planilla y la carpeta del sistema.</p>' +
+      '<button class="btn btn-primario" onclick="login_()">Conectar con Google</button>' +
+      '<div id="error-acceso"></div>';
+  }
+
+  function mostrarErrorAcceso_(mensaje) {
+    var cont = document.getElementById('error-acceso');
+    if (cont) cont.innerHTML = '<div class="caja-ayuda" style="border-color:var(--estado-critico); color:var(--estado-critico);">' + escapeHtml(mensaje) + '</div>';
+    else mostrarToast(mensaje, 'error');
+  }
+
+  function onLoginExitoso_() {
+    if (!CONFIG.SPREADSHEET_ID || !CONFIG.ROOT_FOLDER_ID) {
+      return mostrarPantallaSetupInicial_();
+    }
+    continuarDespuesDeLogin_();
+  }
+
+  function continuarDespuesDeLogin_() {
+    var emailRecordado = localStorage.getItem('sst_usuario_email');
+    if (emailRecordado) {
+      return SERVICIOS.obtenerUsuarioPorEmail_(emailRecordado).then(function (usuario) {
+        if (usuario && (usuario.Activo === true || usuario.Activo === 'sí' || usuario.Activo === 'TRUE')) {
+          return entrarComo_(usuario);
+        }
+        return mostrarPantallaIdentificar_();
+      }).catch(function () { return mostrarPantallaIdentificar_(); });
+    }
+    return mostrarPantallaIdentificar_();
+  }
+
+  function mostrarPantallaSetupInicial_() {
+    tarjetaAcceso_().innerHTML =
+      '<h1>Configuración inicial</h1>' +
+      '<p class="subt">No hay una planilla ni carpeta configuradas todavía. Esto crea la planilla madre (7 hojas + catálogo de 43 documentos) y la carpeta raíz en tu Drive — se hace una sola vez.</p>' +
+      '<div class="campo" style="margin-bottom:12px;"><label>Tu nombre</label><input type="text" id="setup-nombre"></div>' +
+      '<div class="campo" style="margin-bottom:16px;"><label>Tu email</label><input type="email" id="setup-email"></div>' +
+      '<button class="btn btn-primario" onclick="ejecutarSetupInicial_(this)">Crear estructura inicial</button>' +
+      '<div id="resultado-setup"></div>';
+  }
+
+  function ejecutarSetupInicial_(boton) {
+    var nombre = document.getElementById('setup-nombre').value.trim();
+    var email = document.getElementById('setup-email').value.trim();
+    if (!nombre || !email) { mostrarToast('Completa tu nombre y email.', 'error'); return; }
+
+    var textoOriginal = boton.innerHTML;
+    boton.disabled = true;
+    boton.innerHTML = '<span class="spinner"></span> Creando planilla y carpeta…';
+
+    SERVICIOS.crearEstructuraInicial_(nombre, email).then(function (res) {
+      document.getElementById('resultado-setup').innerHTML =
+        '<div class="caja-ayuda" style="margin-top:16px;"><strong>Listo.</strong> Copia estos dos valores y pégalos en el bloque ' +
+        '<code>CONFIG</code> al inicio del archivo, reemplazando <code>SPREADSHEET_ID</code> y <code>ROOT_FOLDER_ID</code>. ' +
+        'Guarda el archivo — desde ahora, cada vez que lo abras (o lo compartas con tu equipo) apuntará a esta misma planilla y carpeta.</div>' +
+        '<div class="caja-id"><code>SPREADSHEET_ID: ' + res.spreadsheetId + '</code></div>' +
+        '<div class="caja-id"><code>ROOT_FOLDER_ID: ' + res.rootFolderId + '</code></div>' +
+        '<a class="btn btn-secundario" href="' + res.spreadsheetUrl + '" target="_blank">Abrir la planilla creada</a>';
+      boton.style.display = 'none';
+      CONFIG.SPREADSHEET_ID = res.spreadsheetId;
+      CONFIG.ROOT_FOLDER_ID = res.rootFolderId;
+      mostrarToast('Estructura creada. No olvides guardar los IDs en el archivo antes de cerrar esta pestaña.', 'exito');
+      continuarDespuesDeLogin_();
+    }).catch(function (err) {
+      boton.disabled = false;
+      boton.innerHTML = textoOriginal;
+      mostrarErrorAcceso_(err.message || String(err));
+    });
+  }
+
+  function mostrarPantallaIdentificar_() {
+    tarjetaAcceso_().innerHTML = '<h1>¿Quién eres?</h1><p class="subt">Cargando usuarios…</p>';
+    return SERVICIOS.listarUsuarios().then(function (usuarios) {
+      var activos = usuarios.filter(function (u) { return u.Activo === true || u.Activo === 'sí' || u.Activo === 'TRUE'; });
+      var html = '<h1>¿Quién eres?</h1><p class="subt">Elige tu nombre de la lista. Este equipo lo recordará para la próxima vez.</p>';
+
+      if (activos.length === 0) {
+        html += '<div class="caja-ayuda">Aún no hay usuarios activos registrados. Pide a un administrador que te agregue, ' +
+          'o si eres tú quien está configurando el sistema por primera vez, agrégate ahora:</div>' +
+          '<div class="campo" style="margin:12px 0;"><label>Tu nombre</label><input type="text" id="id-nombre-nuevo"></div>' +
+          '<div class="campo" style="margin-bottom:12px;"><label>Tu email</label><input type="email" id="id-email-nuevo"></div>' +
+          '<button class="btn btn-primario" onclick="crearPrimerUsuarioYEntrar_(this)">Registrarme como administrador</button>';
+      } else {
+        html += '<div class="lista-usuarios-acceso">' + activos.map(function (u) {
+          return '<div class="item-usuario-acceso" onclick=\'entrarComo_(' + JSON.stringify(u).replace(/'/g, '&apos;') + ')\'>' +
+            '<div><div class="iu-nombre">' + escapeHtml(u.Nombre) + '</div><div class="iu-email">' + escapeHtml(u.Email) + '</div></div>' +
+            '<span class="pill pill-info">' + escapeHtml(String(u.Rol).replace('_', ' ')) + '</span>' +
+          '</div>';
+        }).join('') + '</div>' +
+        '<p style="font-size:11.5px; color:var(--texto-tenue);">¿No estás en la lista? Pide a un administrador que te agregue desde la pantalla de Usuarios.</p>';
+      }
+      tarjetaAcceso_().innerHTML = html;
+    }).catch(function (err) { mostrarErrorAcceso_(err.message || String(err)); });
+  }
+
+  function crearPrimerUsuarioYEntrar_(boton) {
+    var nombre = document.getElementById('id-nombre-nuevo').value.trim();
+    var email = document.getElementById('id-email-nuevo').value.trim();
+    if (!nombre || !email) { mostrarToast('Completa nombre y email.', 'error'); return; }
+    boton.disabled = true;
+    var usuario = { Email: email, Nombre: nombre, Rol: 'administrador', Activo: true };
+    SERVICIOS.guardarUsuario(usuario).then(function () { entrarComo_(usuario); }).catch(function (err) {
+      boton.disabled = false;
+      mostrarErrorAcceso_(err.message || String(err));
+    });
+  }
+
+  function entrarComo_(usuarioFila) {
+    localStorage.setItem('sst_usuario_email', usuarioFila.Email);
+    return SERVICIOS.obtenerConfiguracion().then(function (config) {
+      state.usuario = {
+        email: usuarioFila.Email,
+        nombre: usuarioFila.Nombre || usuarioFila.Email,
+        rol: usuarioFila.Rol || 'solo_lectura',
+        activo: true
+      };
+      state.config = config;
+      document.getElementById('pantalla-acceso').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      pintarShell();
+      navegarA('dashboard');
+    });
+  }
+
+  function cambiarUsuario_() {
+    localStorage.removeItem('sst_usuario_email');
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('pantalla-acceso').style.display = 'flex';
+    mostrarPantallaIdentificar_();
+  }
+
+  // ── Sheets API — helpers genéricos ──────────────────────────────────
+
+  function sheetGetAll_(nombreHoja) {
+    var url = API_SHEETS + '/' + CONFIG.SPREADSHEET_ID + '/values/' + encodeURIComponent(nombreHoja);
+    return apiFetch_(url).then(function (r) { return r.json(); }).then(function (d) { return d.values || []; });
+  }
+
+  function filasAObjetos_(filas) {
+    if (filas.length < 2) return [];
+    var headers = filas[0];
+    return filas.slice(1)
+      .filter(function (f) { return f.some(function (c) { return c !== '' && c !== undefined; }); })
+      .map(function (f) {
+        var obj = {};
+        headers.forEach(function (h, j) { obj[h] = f[j] !== undefined ? f[j] : ''; });
+        return obj;
+      });
+  }
+
+  function sheetHeaders_(nombreHoja) {
+    var url = API_SHEETS + '/' + CONFIG.SPREADSHEET_ID + '/values/' + encodeURIComponent(nombreHoja + '!1:1');
+    return apiFetch_(url).then(function (r) { return r.json(); }).then(function (d) { return (d.values && d.values[0]) || []; });
+  }
+
+  function sheetLeerObjetos_(nombreHoja) {
+    return sheetGetAll_(nombreHoja).then(filasAObjetos_);
+  }
+
+  function sheetAppendObjeto_(nombreHoja, obj) {
+    return sheetHeaders_(nombreHoja).then(function (headers) {
+      var fila = headers.map(function (h) { return (obj[h] !== undefined && obj[h] !== null) ? obj[h] : ''; });
+      var url = API_SHEETS + '/' + CONFIG.SPREADSHEET_ID + '/values/' + encodeURIComponent(nombreHoja) +
+        '!A1:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS';
+      return apiFetch_(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: [fila] }) });
+    });
+  }
+
+  function columnaALetra_(idx) {
+    var letra = '';
+    idx += 1;
+    while (idx > 0) {
+      var rem = (idx - 1) % 26;
+      letra = String.fromCharCode(65 + rem) + letra;
+      idx = Math.floor((idx - 1) / 26);
+    }
+    return letra;
+  }
+
+  function sheetActualizarPorId_(nombreHoja, idColumna, idValor, cambios) {
+    return Promise.all([sheetHeaders_(nombreHoja), sheetGetAll_(nombreHoja)]).then(function (res) {
+      var headers = res[0], filas = res[1];
+      var idxCol = headers.indexOf(idColumna);
+      var filaEncontrada = -1;
+      for (var i = 1; i < filas.length; i++) {
+        if (String(filas[i][idxCol]) === String(idValor)) { filaEncontrada = i + 1; break; }
+      }
+      if (filaEncontrada === -1) throw new Error('No se encontró ' + idColumna + '=' + idValor + ' en ' + nombreHoja);
+
+      var data = Object.keys(cambios).map(function (campo) {
+        var col = headers.indexOf(campo);
+        if (col === -1) return null;
+        var letra = columnaALetra_(col);
+        return { range: nombreHoja + '!' + letra + filaEncontrada, values: [[cambios[campo]]] };
+      }).filter(function (x) { return x; });
+
+      if (data.length === 0) return;
+      var url = API_SHEETS + '/' + CONFIG.SPREADSHEET_ID + '/values:batchUpdate';
+      return apiFetch_(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data: data })
+      });
+    });
+  }
+
+  function buscarFilaPor_(nombreHoja, campo, valor) {
+    return sheetLeerObjetos_(nombreHoja).then(function (filas) {
+      return filas.filter(function (f) { return String(f[campo]) === String(valor); })[0] || null;
+    });
+  }
+
+  function generarIdAnual_(prefijo, nombreHoja, idColumna) {
+    var anio = new Date().getFullYear();
+    return sheetLeerObjetos_(nombreHoja).then(function (filas) {
+      var patron = prefijo + '-' + anio + '-';
+      var contador = 0;
+      filas.forEach(function (f) {
+        if (String(f[idColumna]).indexOf(patron) === 0) contador++;
+      });
+      return prefijo + '-' + anio + '-' + String(contador + 1).padStart(3, '0');
+    });
+  }
+
+  function generarIdSecuencial_(prefijo, nombreHoja, idColumna) {
+    return sheetLeerObjetos_(nombreHoja).then(function (filas) {
+      var maxNum = 0;
+      filas.forEach(function (f) {
+        var partes = String(f[idColumna]).split('-');
+        var n = parseInt(partes[partes.length - 1], 10);
+        if (!isNaN(n) && n > maxNum) maxNum = n;
+      });
+      return prefijo + '-' + String(maxNum + 1).padStart(5, '0');
+    });
+  }
+
+  // ── Drive API — helpers genéricos ───────────────────────────────────
+
+  function driveGetOrCrearCarpeta_(nombre, parentId) {
+    var nombreEscapado = nombre.replace(/'/g, "\\'");
+    var q = encodeURIComponent("name='" + nombreEscapado + "' and '" + parentId + "' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false");
+    return apiFetch_(API_DRIVE + '/files?q=' + q + '&fields=files(id,name)').then(function (r) { return r.json(); }).then(function (d) {
+      if (d.files && d.files.length > 0) return d.files[0].id;
+      return apiFetch_(API_DRIVE + '/files?fields=id', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nombre, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] })
+      }).then(function (r) { return r.json(); }).then(function (d2) { return d2.id; });
+    });
+  }
+
+  // Convierte un string base64 a Blob sin pasar por atob completo en memoria innecesariamente.
+  function base64AblobUtil_(base64, mimeType) {
+    var bytes = atob(base64);
+    var arr = new Uint8Array(bytes.length);
+    for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    return new Blob([arr], { type: mimeType || 'application/octet-stream' });
+  }
+
+  function multipartBody_(metadata, blob, boundary) {
+    var cabecera = new Blob(
+      ['--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(metadata) +
+       '\r\n--' + boundary + '\r\nContent-Type: ' + (blob.type || 'application/octet-stream') + '\r\n\r\n'],
+      { type: 'text/plain' }
+    );
+    var cierre = new Blob(['\r\n--' + boundary + '--'], { type: 'text/plain' });
+    return new Blob([cabecera, blob, cierre]);
+  }
+
+  function driveSubirBase64_(parentId, base64, mimeType, nombreArchivo) {
+    var blob = base64AblobUtil_(base64, mimeType);
+    var boundary = '-------sst' + Math.random().toString(36).slice(2);
+    var cuerpo = multipartBody_({ name: nombreArchivo, parents: [parentId] }, blob, boundary);
+    return apiFetch_(API_DRIVE_UPLOAD + '?uploadType=multipart&fields=id,webViewLink,name', {
+      method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + boundary }, body: cuerpo
+    }).then(function (r) { return r.json(); });
+  }
+
+  function driveSobrescribirBase64_(fileId, base64, mimeType) {
+    var blob = base64AblobUtil_(base64, mimeType);
+    return apiFetch_(API_DRIVE_UPLOAD + '/' + fileId + '?uploadType=media&fields=id,webViewLink,name', {
+      method: 'PATCH', headers: { 'Content-Type': mimeType || 'application/octet-stream' }, body: blob
+    }).then(function (r) { return r.json(); });
+  }
+
+  // OCR: sube el PDF convirtiéndolo a Google Doc con reconocimiento de texto,
+  // exporta el texto plano resultante, y bota el Doc temporal a la papelera.
+  function driveOcrExtraerTexto_(base64, mimeType) {
+    var blob = base64AblobUtil_(base64, mimeType);
+    var boundary = '-------sstocr' + Math.random().toString(36).slice(2);
+    var cuerpo = multipartBody_({ name: 'OCR_TEMP_' + Date.now(), mimeType: 'application/vnd.google-apps.document' }, blob, boundary);
+
+    return apiFetch_(API_DRIVE_UPLOAD + '?uploadType=multipart&ocrLanguage=es&fields=id', {
+      method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + boundary }, body: cuerpo
+    }).then(function (r) { return r.json(); }).then(function (creado) {
+      return apiFetch_(API_DRIVE + '/files/' + creado.id + '/export?mimeType=text/plain')
+        .then(function (r) { return r.text(); })
+        .then(function (texto) {
+          apiFetch_(API_DRIVE + '/files/' + creado.id, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true })
+          }).catch(function () {});
+          return texto;
+        });
+    });
+  }
+
+  // ── Utilidades de fecha / texto (equivalentes a Utils.gs) ───────────
+
+  function formatearFechaISO_(fecha) {
+    if (!fecha) return '';
+    var d = (fecha instanceof Date) ? fecha : new Date(fecha);
+    if (isNaN(d.getTime())) return '';
+    return d.toISOString().substring(0, 10);
+  }
+  function formatearFechaHoraISO_(fecha) {
+    if (!fecha) return '';
+    var d = (fecha instanceof Date) ? fecha : new Date(fecha);
+    if (isNaN(d.getTime())) return '';
+    return d.toISOString().replace('T', ' ').substring(0, 19);
+  }
+  function hoyISO_() { return formatearFechaISO_(new Date()); }
+  function esFechaAnteriorAHoy_(fechaISO) {
+    if (!fechaISO) return false;
+    return new Date(fechaISO).getTime() < new Date(hoyISO_()).getTime();
+  }
+  function sanitizarTexto_(texto) {
+    if (!texto) return '';
+    return String(texto).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9\s_-]/g, '').trim().replace(/\s+/g, '_');
+  }
+  function esVerdadero_(v) { return v === true || v === 'sí' || v === 'si' || v === 'SI' || v === 'TRUE' || v === 1; }
+</script>
+
+  <!-- ── SERVICIOS REST (nuevo, reemplaza los .gs) ── -->
+<script>
+  /* =====================================================================
+     SERVICIOS — lógica de negocio (antes en los .gs de Apps Script),
+     ahora implementada como funciones de cliente que llaman directo a
+     Sheets API v4 y Drive API v3. Cada función aquí corresponde 1:1 a
+     una función que antes vivía en el backend de Apps Script — mismos
+     nombres y firma, para que toda la UI (vistas, formularios, tablas)
+     funcione sin cambios.
+     ===================================================================== */
+
+  var SHEETS = {
+    CASOS: 'Casos', MEDIDAS: 'Medidas_Correctivas', DOCUMENTOS_CASO: 'Documentos_Caso',
+    CATALOGO: 'Catalogo_Documentos', USUARIOS: 'Usuarios', HISTORIAL: 'Historial_Cambios',
+    CONFIGURACION: 'Configuracion'
+  };
+
+  var GRAVEDAD = { LEVE: 'LEVE', GRAVE: 'GRAVE', FATAL: 'FATAL' };
+  var ESTADO_CASO = { ABIERTO: 'abierto', EN_INVESTIGACION: 'en_investigacion', CERRADO: 'cerrado' };
+  var ESTADO_MEDIDA = { ABIERTA: 'abierta', EN_CURSO: 'en_curso', CERRADA: 'cerrada', VENCIDA: 'vencida' };
+  var ESTADO_DOCUMENTO = { PENDIENTE: 'pendiente', CARGADO: 'cargado', NO_APLICA: 'no_aplica' };
+
+  var DEFINICION_HOJAS = {
+    Casos: [
+      'ID_Caso', 'Fecha_Registro', 'Estado_Caso', 'Dependencia', 'Nombre_Empresa',
+      'Cliente', 'Proyecto', 'Tipo_Servicio', 'RUT_Trabajador', 'Nombre_Trabajador',
+      'Cargo', 'Region', 'Fecha_Contrato', 'Edad', 'Legalidad', 'Supervisor_A_Cargo',
+      'Tipo_Siniestro', 'Calificacion', 'Fecha_Siniestro', 'Hora_Siniestro',
+      'Direccion', 'Comuna', 'Ciudad', 'Hora_Ingreso_Turno', 'Horas_Trabajo_Al_Momento',
+      'Dias_Reposo', 'Fecha_Inicio_Reposo', 'Gravedad', 'Descripcion_Accidente',
+      'Causa_Raiz', 'APR_A_Cargo', 'Nombre_Redacta', 'Nombre_Revisa', 'Nombre_Aprueba',
+      'ID_Carpeta_Drive', 'URL_Carpeta_Drive', 'Subcarpetas_JSON', 'Version_Catalogo_Usada',
+      'Registrado_Por', 'Fecha_Cierre', 'Observaciones'
+    ],
+    Medidas_Correctivas: [
+      'ID_Medida', 'ID_Caso', 'Descripcion', 'Responsable', 'Fecha_Compromiso',
+      'Fecha_Cierre_Real', 'Estado', 'Comentario_Evidencia', 'Fecha_Registro', 'Registrado_Por'
+    ],
+    Documentos_Caso: [
+      'ID_Registro', 'ID_Caso', 'ID_Item_Catalogo', 'Categoria', 'Nombre_Documento',
+      'Condicion_Adicional', 'Carpeta_Drive_Id', 'Estado', 'Version', 'Drive_File_Id',
+      'URL_Drive', 'Nombre_Archivo', 'Fecha_Carga', 'Cargado_Por', 'Es_Personalizado'
+    ],
+    Catalogo_Documentos: [
+      'ID_Item', 'Version_Catalogo', 'Categoria', 'Nombre_Documento', 'Aplica_Siempre',
+      'Aplica_Solo_Grave_NT142', 'Aplica_Solo_Fatal', 'Fuente_Exigencia', 'Condicion_Adicional', 'Activo'
+    ],
+    Usuarios: ['Email', 'Nombre', 'Rol', 'Activo'],
+    Historial_Cambios: ['Fecha_Hora', 'Usuario', 'ID_Referencia', 'Tipo_Referencia', 'Accion', 'Detalle'],
+    Configuracion: ['Clave', 'Valor']
+  };
+
+  var CATEGORIAS_CARPETAS = [
+    { categoria: 'Antecedentes_Trabajador', carpeta: '00_Antecedentes_Trabajador' },
+    { categoria: 'Licencias_Medicas',       carpeta: '01_Licencias_Medicas' },
+    { categoria: 'DIAT_Empresa',            carpeta: '02_DIAT_Empresa' },
+    { categoria: 'DIAT_Trabajador',         carpeta: '03_DIAT_Trabajador' },
+    { categoria: 'Fotografias_Evidencia',   carpeta: '04_Fotografias_Evidencia' },
+    { categoria: 'Investigacion',           carpeta: '05_Investigacion' },
+    { categoria: 'Instrumentos_Prevencion', carpeta: '06_Instrumentos_Prevencion' },
+    { categoria: 'EPP',                     carpeta: '07_EPP' },
+    { categoria: 'Fiscalizacion_DT_Seremi', carpeta: '08_Fiscalizacion_DT_Seremi' },
+    { categoria: 'Otros',                   carpeta: '09_Otros' }
+  ];
+
+  var CATALOGO_V1 = (function () {
+    var C = 'Antecedentes_Trabajador', L = 'Licencias_Medicas', DE = 'DIAT_Empresa',
+        DW = 'DIAT_Trabajador', FE = 'Fotografias_Evidencia', INV = 'Investigacion',
+        IP = 'Instrumentos_Prevencion', EPP = 'EPP', FZ = 'Fiscalizacion_DT_Seremi';
+    // [ID_Item, Categoria, Nombre_Documento, Aplica_Siempre, Aplica_Solo_Grave_NT142, Aplica_Solo_Fatal, Fuente_Exigencia, Condicion_Adicional]
+    return [
+      ['AT-01', C, 'Contrato de trabajo del accidentado', true, false, false, 'Ambas', ''],
+      ['AT-02', C, 'Registro de asistencia (6 meses previos)', false, true, false, 'DT', ''],
+      ['AT-03', C, 'Pacto de horas extraordinarias (6 meses previos)', false, true, false, 'DT', ''],
+      ['AT-04', C, 'Comprobante de pago de remuneraciones (6 meses previos)', false, true, false, 'DT', ''],
+      ['AT-05', C, 'Cotizaciones previsionales AFP/IPS/Mutual/CCAF (6 meses previos)', false, true, false, 'DT', ''],
+      ['AT-06', C, 'Examen ocupacional del accidentado', false, true, false, 'DT', 'Solo si el cargo requiere altura física'],
+      ['AT-07', C, 'Licencia de conductor u operador de maquinaria', false, true, false, 'DT', 'Solo si el cargo lo requiere'],
+      ['AT-08', C, 'Certificado de alta médica / situación actual', true, false, false, 'SEREMI', ''],
+      ['LM-01', L, 'Licencias médicas emitidas durante el caso', true, false, false, 'Interno', ''],
+      ['DE-01', DE, 'DIAT presentada por la empresa, con folio', true, false, false, 'Ambas', ''],
+      ['DW-01', DW, 'DIAT presentada de forma independiente por el trabajador', false, true, false, 'Ambas', 'Solo si el trabajador la presentó'],
+      ['FE-01', FE, 'Fotografías del lugar del accidente', true, false, false, 'Ambas', ''],
+      ['FE-02', FE, 'Videos del lugar del accidente', false, true, false, 'SEREMI', 'Si existen'],
+      ['FE-03', FE, 'Declaraciones juradas de testigos', false, true, false, 'Ambas', 'Si los hay'],
+      ['FE-04', FE, 'Parte policial / Informe de Fiscalía', false, true, false, 'DT', 'Si aplica'],
+      ['INV-01', INV, 'Informe de Investigación interno Zener (PDF completo, incluye árbol de causas)', true, false, false, 'Interno', ''],
+      ['INV-02', INV, 'Informe organismo administrador + Formulario de Medidas Inmediatas', true, false, false, 'Ambas', ''],
+      ['INV-03', INV, 'Certificado organismo administrador con medidas correctivas implementadas', false, true, false, 'Ambas', ''],
+      ['INV-04', INV, 'Informe del accidente del Comité Paritario', false, true, false, 'DT', ''],
+      ['INV-05', INV, 'Consolidado de pago organismo administrador (tasa cotización, N° trabajadores)', false, true, false, 'Ambas', ''],
+      ['INV-06', INV, 'Estadísticas de accidentes de la empresa (tasa accidentabilidad/siniestralidad)', false, true, false, 'DT', ''],
+      ['IP-01', IP, 'Reglamento Interno de Higiene y Seguridad', false, true, false, 'DT', ''],
+      ['IP-02', IP, 'Acta de recepción del Reglamento Interno por el trabajador', false, true, false, 'DT', ''],
+      ['IP-03', IP, 'Obligación de Informar: PTS entregado + Análisis de Seguridad del Trabajo', true, false, false, 'Ambas', ''],
+      ['IP-04', IP, 'Obligación de Informar: capacitación en PTS y riesgos', true, false, false, 'Ambas', ''],
+      ['IP-05', IP, 'Registro de actividades del DPR / programa de prevención', false, true, false, 'DT', ''],
+      ['IP-06', IP, 'Acta constitución Comité Paritario + 3 últimas actas', false, true, false, 'DT', ''],
+      ['IP-07', IP, 'Matriz de evaluación de riesgos e indicaciones técnicas del experto', false, true, false, 'DT', ''],
+      ['IP-08', IP, 'Sistema de Gestión de SST', false, true, false, 'DT', ''],
+      ['IP-09', IP, 'Prevencionista de riesgos: registro, contrato, asistencia', false, true, false, 'DT', ''],
+      ['IP-10', IP, 'Programa de trabajo aprobado (empresa principal + contratista)', false, true, false, 'DT', 'Solo si Dependencia = Contratista'],
+      ['IP-11', IP, 'Reglamento Especial para contratistas y subcontratistas', false, true, false, 'DT', 'Solo si Dependencia = Contratista'],
+      ['IP-12', IP, 'Acta de entrega del reglamento especial', false, true, false, 'DT', 'Solo si Dependencia = Contratista'],
+      ['IP-13', IP, 'Registro de faena de contratistas y subcontratistas', false, true, false, 'DT', 'Solo si Dependencia = Contratista'],
+      ['IP-14', IP, 'Contrato de prestación de servicios / orden de trabajo', false, true, false, 'Ambas', 'Solo si Dependencia = Contratista'],
+      ['EPP-01', EPP, 'Registro de entrega de EPP adecuado al riesgo', true, false, false, 'DT', ''],
+      ['EPP-02', EPP, 'Certificación de EPP utilizados al momento del accidente', true, false, false, 'DT', ''],
+      ['FZ-01', FZ, 'Denuncia por escrito a Inspección del Trabajo (SALUD RESPONDE)', false, true, false, 'DT', 'Si aplica'],
+      ['FZ-02', FZ, 'Copia del acta de fiscalización FI-4', false, true, false, 'SEREMI', ''],
+      ['FZ-03', FZ, 'Acta de fiscalización Seremi Salud / Sernageomin / Directemar', false, true, false, 'DT', 'Si llegó antes'],
+      ['FZ-04', FZ, 'Documento que acredite Código de Actividad Económica', false, true, false, 'DT', ''],
+      ['FZ-05', FZ, 'Resolución de Calificación del Accidente (RECA)', false, false, true, 'SEREMI', 'Solo accidentes fatales'],
+      ['FZ-06', FZ, 'Certificado de defunción del trabajador', false, false, true, 'DT', 'Solo accidentes fatales']
+    ];
+  })();
+
+  var SERVICIOS = {};
+
+  // ── Configuración ────────────────────────────────────────────────────
+
+  SERVICIOS.obtenerConfiguracion = function () {
+    return sheetLeerObjetos_(SHEETS.CONFIGURACION).then(function (filas) {
+      var config = {};
+      filas.forEach(function (f) { config[f.Clave] = f.Valor; });
+      return config;
+    });
+  };
+
+  function obtenerValorConfig_(clave, porDefecto) {
+    return SERVICIOS.obtenerConfiguracion().then(function (config) {
+      return (config[clave] !== undefined && config[clave] !== '') ? config[clave] : porDefecto;
+    });
+  }
+
+  function obtenerVersionCatalogoActiva_() {
+    return obtenerValorConfig_('VERSION_CATALOGO_ACTIVA', 'v1');
+  }
+
+  // ── Historial ────────────────────────────────────────────────────────
+
+  function registrarCambio_(idReferencia, tipoReferencia, accion, detalle) {
+    return sheetAppendObjeto_(SHEETS.HISTORIAL, {
+      Fecha_Hora: formatearFechaHoraISO_(new Date()),
+      Usuario: state.usuario ? state.usuario.email : '—',
+      ID_Referencia: idReferencia, Tipo_Referencia: tipoReferencia, Accion: accion, Detalle: detalle || ''
+    });
+  }
+
+  function obtenerHistorialPorCaso_(idCaso) {
+    return Promise.all([
+      sheetLeerObjetos_(SHEETS.HISTORIAL), sheetLeerObjetos_(SHEETS.MEDIDAS), sheetLeerObjetos_(SHEETS.DOCUMENTOS_CASO)
+    ]).then(function (res) {
+      var todas = res[0];
+      var idsMedidas = res[1].filter(function (m) { return m.ID_Caso === idCaso; }).map(function (m) { return m.ID_Medida; });
+      var idsDocs = res[2].filter(function (d) { return d.ID_Caso === idCaso; }).map(function (d) { return d.ID_Registro; });
+      var relevantes = [idCaso].concat(idsMedidas).concat(idsDocs);
+      return todas.filter(function (h) { return relevantes.indexOf(h.ID_Referencia) !== -1; })
+        .sort(function (a, b) { return new Date(b.Fecha_Hora) - new Date(a.Fecha_Hora); });
+    });
+  }
+
+  // ── Usuarios ─────────────────────────────────────────────────────────
+
+  SERVICIOS.obtenerUsuarioPorEmail_ = function (email) { return buscarFilaPor_(SHEETS.USUARIOS, 'Email', email); };
+
+  SERVICIOS.listarUsuarios = function () { return sheetLeerObjetos_(SHEETS.USUARIOS); };
+
+  SERVICIOS.guardarUsuario = function (datos) {
+    if (!datos.Email) return Promise.reject(new Error('El email es obligatorio.'));
+    return buscarFilaPor_(SHEETS.USUARIOS, 'Email', datos.Email).then(function (existente) {
+      var accion = existente ? sheetActualizarPorId_(SHEETS.USUARIOS, 'Email', datos.Email, {
+        Nombre: datos.Nombre || existente.Nombre, Rol: datos.Rol, Activo: datos.Activo !== undefined ? datos.Activo : existente.Activo
+      }) : sheetAppendObjeto_(SHEETS.USUARIOS, {
+        Email: datos.Email, Nombre: datos.Nombre || datos.Email, Rol: datos.Rol, Activo: datos.Activo !== undefined ? datos.Activo : true
+      });
+      return accion.then(function () {
+        return registrarCambio_(datos.Email, 'Usuario', existente ? 'edicion' : 'creacion', 'Rol: ' + datos.Rol + ', activo: ' + datos.Activo);
+      }).then(SERVICIOS.listarUsuarios);
+    });
+  };
+
+  SERVICIOS.desactivarUsuario = function (email) {
+    return sheetActualizarPorId_(SHEETS.USUARIOS, 'Email', email, { Activo: false })
+      .then(function () { return registrarCambio_(email, 'Usuario', 'edicion', 'Desactivado'); })
+      .then(SERVICIOS.listarUsuarios);
+  };
+
+  // ── Drive: estructura de carpetas por caso ──────────────────────────
+
+  function crearCarpetaCaso_(idCaso, nombreTrabajador, fechaSiniestroISO) {
+    var anio = fechaSiniestroISO ? fechaSiniestroISO.substring(0, 4) : String(new Date().getFullYear());
+    return driveGetOrCrearCarpeta_(anio, CONFIG.ROOT_FOLDER_ID).then(function (carpetaAnioId) {
+      var nombreCarpetaCaso = idCaso + '_' + sanitizarTexto_(nombreTrabajador) + '_' + fechaSiniestroISO;
+      return driveGetOrCrearCarpeta_(nombreCarpetaCaso, carpetaAnioId).then(function (carpetaCasoId) {
+        var subcarpetas = {};
+        var cadena = Promise.resolve();
+        CATEGORIAS_CARPETAS.forEach(function (c) {
+          cadena = cadena.then(function () {
+            return driveGetOrCrearCarpeta_(c.carpeta, carpetaCasoId).then(function (id) { subcarpetas[c.categoria] = id; });
+          });
+        });
+        return cadena.then(function () {
+          return { folderId: carpetaCasoId, folderUrl: 'https://drive.google.com/drive/folders/' + carpetaCasoId, subcarpetas: subcarpetas };
+        });
+      });
+    });
+  }
+
+  // ── Casos ────────────────────────────────────────────────────────────
+
+  SERVICIOS.listarCasos = function (filtros) {
+    filtros = filtros || {};
+    return sheetLeerObjetos_(SHEETS.CASOS).then(function (casos) {
+      return casos.filter(function (c) {
+        if (filtros.estado && c.Estado_Caso !== filtros.estado) return false;
+        if (filtros.cliente && c.Cliente !== filtros.cliente) return false;
+        if (filtros.gravedad && c.Gravedad !== filtros.gravedad) return false;
+        if (filtros.texto) {
+          var t = filtros.texto.toLowerCase();
+          var coincide = String(c.Nombre_Trabajador).toLowerCase().indexOf(t) !== -1 ||
+            String(c.RUT_Trabajador).toLowerCase().indexOf(t) !== -1 ||
+            String(c.ID_Caso).toLowerCase().indexOf(t) !== -1;
+          if (!coincide) return false;
+        }
+        return true;
+      }).sort(function (a, b) { return new Date(b.Fecha_Registro) - new Date(a.Fecha_Registro); });
+    });
+  };
+
+  SERVICIOS.crearCaso = function (datos) {
+    return generarIdAnual_('CASO', SHEETS.CASOS, 'ID_Caso').then(function (idCaso) {
+      var fechaSiniestroISO = datos.Fecha_Siniestro ? formatearFechaISO_(datos.Fecha_Siniestro) : hoyISO_();
+      return crearCarpetaCaso_(idCaso, datos.Nombre_Trabajador || 'SinNombre', fechaSiniestroISO).then(function (carpeta) {
+        return obtenerVersionCatalogoActiva_().then(function (versionCatalogo) {
+          var caso = Object.assign({}, datos, {
+            ID_Caso: idCaso, Fecha_Registro: formatearFechaHoraISO_(new Date()), Estado_Caso: ESTADO_CASO.ABIERTO,
+            Fecha_Siniestro: fechaSiniestroISO, ID_Carpeta_Drive: carpeta.folderId, URL_Carpeta_Drive: carpeta.folderUrl,
+            Subcarpetas_JSON: JSON.stringify(carpeta.subcarpetas), Version_Catalogo_Usada: versionCatalogo,
+            Registrado_Por: state.usuario.email
+          });
+          return sheetAppendObjeto_(SHEETS.CASOS, caso)
+            .then(function () { return inicializarChecklistCaso_(idCaso, datos.Gravedad, carpeta.subcarpetas, versionCatalogo); })
+            .then(function () { return registrarCambio_(idCaso, 'Caso', 'creacion', 'Gravedad: ' + datos.Gravedad); })
+            .then(function () { return SERVICIOS.obtenerCaso(idCaso); });
+        });
+      });
+    });
+  };
+
+  SERVICIOS.obtenerCaso = function (idCaso) {
+    return buscarFilaPor_(SHEETS.CASOS, 'ID_Caso', idCaso).then(function (caso) {
+      if (!caso) throw new Error('Caso ' + idCaso + ' no encontrado.');
+      caso.Subcarpetas = caso.Subcarpetas_JSON ? JSON.parse(caso.Subcarpetas_JSON) : {};
+      return Promise.all([
+        SERVICIOS.listarMedidasPorCaso(idCaso), SERVICIOS.listarChecklistPorCaso(idCaso), obtenerHistorialPorCaso_(idCaso)
+      ]).then(function (res) {
+        return { caso: caso, medidas: res[0], documentos: res[1], historial: res[2] };
+      });
+    });
+  };
+
+  SERVICIOS.cerrarCaso = function (idCaso) {
+    return sheetActualizarPorId_(SHEETS.CASOS, 'ID_Caso', idCaso, { Estado_Caso: ESTADO_CASO.CERRADO, Fecha_Cierre: hoyISO_() })
+      .then(function () { return registrarCambio_(idCaso, 'Caso', 'cambio_estado', 'Caso cerrado'); })
+      .then(function () { return SERVICIOS.obtenerCaso(idCaso); });
+  };
+
+  SERVICIOS.reabrirCaso = function (idCaso) {
+    return sheetActualizarPorId_(SHEETS.CASOS, 'ID_Caso', idCaso, { Estado_Caso: ESTADO_CASO.EN_INVESTIGACION, Fecha_Cierre: '' })
+      .then(function () { return registrarCambio_(idCaso, 'Caso', 'cambio_estado', 'Caso reabierto'); })
+      .then(function () { return SERVICIOS.obtenerCaso(idCaso); });
+  };
+
+  // ── Medidas correctivas ──────────────────────────────────────────────
+
+  function calcularEstadoMedida_(m) {
+    if (m.Estado === ESTADO_MEDIDA.CERRADA) return ESTADO_MEDIDA.CERRADA;
+    if (esFechaAnteriorAHoy_(m.Fecha_Compromiso)) return ESTADO_MEDIDA.VENCIDA;
+    return m.Estado || ESTADO_MEDIDA.ABIERTA;
+  }
+
+  SERVICIOS.listarMedidasPorCaso = function (idCaso) {
+    return sheetLeerObjetos_(SHEETS.MEDIDAS).then(function (medidas) {
+      return medidas.filter(function (m) { return m.ID_Caso === idCaso; })
+        .map(function (m) { m.Estado_Calculado = calcularEstadoMedida_(m); return m; });
+    });
+  };
+
+  SERVICIOS.crearMedida = function (idCaso, datos) {
+    return generarIdSecuencial_('MED', SHEETS.MEDIDAS, 'ID_Medida').then(function (idMedida) {
+      var medida = Object.assign({}, datos, {
+        ID_Medida: idMedida, ID_Caso: idCaso, Estado: datos.Estado || ESTADO_MEDIDA.ABIERTA,
+        Fecha_Registro: formatearFechaHoraISO_(new Date()), Registrado_Por: state.usuario.email
+      });
+      return sheetAppendObjeto_(SHEETS.MEDIDAS, medida)
+        .then(function () { return registrarCambio_(idMedida, 'Medida', 'creacion', 'Medida creada para ' + idCaso); })
+        .then(function () { return SERVICIOS.listarMedidasPorCaso(idCaso); });
+    });
+  };
+
+  SERVICIOS.actualizarMedida = function (idMedida, cambios) {
+    return buscarFilaPor_(SHEETS.MEDIDAS, 'ID_Medida', idMedida).then(function (actual) {
+      if (!actual) throw new Error('Medida ' + idMedida + ' no encontrada.');
+      if (cambios.Estado === ESTADO_MEDIDA.CERRADA && !cambios.Fecha_Cierre_Real) cambios.Fecha_Cierre_Real = hoyISO_();
+      return sheetActualizarPorId_(SHEETS.MEDIDAS, 'ID_Medida', idMedida, cambios)
+        .then(function () { return registrarCambio_(idMedida, 'Medida', 'edicion', JSON.stringify(cambios)); })
+        .then(function () { return SERVICIOS.listarMedidasPorCaso(actual.ID_Caso); });
+    });
+  };
+
+  // ── Dashboard ────────────────────────────────────────────────────────
+
+  SERVICIOS.obtenerKPIsDashboard = function () {
+    return Promise.all([sheetLeerObjetos_(SHEETS.CASOS), sheetLeerObjetos_(SHEETS.MEDIDAS), sheetLeerObjetos_(SHEETS.DOCUMENTOS_CASO)])
+      .then(function (res) {
+        var casos = res[0], medidas = res[1], documentos = res[2];
+        var totalCasos = casos.length;
+        var casosAbiertos = casos.filter(function (c) { return c.Estado_Caso !== ESTADO_CASO.CERRADO; }).length;
+        var conteo = { abiertas: 0, en_curso: 0, cerradas: 0, vencidas: 0 };
+        medidas.forEach(function (m) {
+          var e = calcularEstadoMedida_(m);
+          if (e === ESTADO_MEDIDA.VENCIDA) conteo.vencidas++;
+          else if (e === ESTADO_MEDIDA.CERRADA) conteo.cerradas++;
+          else if (e === ESTADO_MEDIDA.EN_CURSO) conteo.en_curso++;
+          else conteo.abiertas++;
+        });
+        var idsAbiertos = casos.filter(function (c) { return c.Estado_Caso !== ESTADO_CASO.CERRADO; }).map(function (c) { return c.ID_Caso; });
+        var documentosPendientes = documentos.filter(function (d) {
+          return d.Estado === ESTADO_DOCUMENTO.PENDIENTE && idsAbiertos.indexOf(d.ID_Caso) !== -1;
+        }).length;
+        return {
+          total_accidentes: totalCasos, accidentes_abiertos: casosAbiertos, accidentes_cerrados: totalCasos - casosAbiertos,
+          medidas_abiertas: conteo.abiertas + conteo.en_curso, medidas_vencidas: conteo.vencidas, documentos_pendientes: documentosPendientes
+        };
+      });
+  };
+
+  SERVICIOS.obtenerDesgloseDashboard = function () {
+    return sheetLeerObjetos_(SHEETS.CASOS).then(function (casos) {
+      var porCliente = {}, porGravedad = {};
+      casos.forEach(function (c) {
+        porCliente[c.Cliente] = (porCliente[c.Cliente] || 0) + 1;
+        porGravedad[c.Gravedad] = (porGravedad[c.Gravedad] || 0) + 1;
+      });
+      return { por_cliente: porCliente, por_gravedad: porGravedad };
+    });
+  };
+
+  // ── Documentos / checklist ───────────────────────────────────────────
+
+  function inicializarChecklistCaso_(idCaso, gravedad, subcarpetas, versionCatalogo) {
+    return sheetLeerObjetos_(SHEETS.CATALOGO).then(function (catalogo) {
+      var itemsAplicables = catalogo.filter(function (item) {
+        if (item.Version_Catalogo !== versionCatalogo || !esVerdadero_(item.Activo)) return false;
+        if (esVerdadero_(item.Aplica_Siempre)) return true;
+        if ((gravedad === GRAVEDAD.GRAVE || gravedad === GRAVEDAD.FATAL) && esVerdadero_(item.Aplica_Solo_Grave_NT142)) return true;
+        if (gravedad === GRAVEDAD.FATAL && esVerdadero_(item.Aplica_Solo_Fatal)) return true;
+        return false;
+      });
+
+      return generarIdSecuencial_('DOC', SHEETS.DOCUMENTOS_CASO, 'ID_Registro').then(function (primerId) {
+        var numeroBase = parseInt(primerId.split('-').pop(), 10);
+        var filas = itemsAplicables.map(function (item, i) {
+          return {
+            ID_Registro: 'DOC-' + String(numeroBase + i).padStart(5, '0'),
+            ID_Caso: idCaso, ID_Item_Catalogo: item.ID_Item, Categoria: item.Categoria, Nombre_Documento: item.Nombre_Documento,
+            Condicion_Adicional: item.Condicion_Adicional || '', Carpeta_Drive_Id: subcarpetas[item.Categoria] || '',
+            Estado: ESTADO_DOCUMENTO.PENDIENTE, Version: 0, Drive_File_Id: '', URL_Drive: '', Nombre_Archivo: '',
+            Fecha_Carga: '', Cargado_Por: '', Es_Personalizado: false
+          };
+        });
+        if (filas.length === 0) return;
+        return sheetAppendVarias_(SHEETS.DOCUMENTOS_CASO, filas);
+      });
+    });
+  }
+
+  function sheetAppendVarias_(nombreHoja, objetos) {
+    return sheetHeaders_(nombreHoja).then(function (headers) {
+      var filas = objetos.map(function (obj) {
+        return headers.map(function (h) { return (obj[h] !== undefined && obj[h] !== null) ? obj[h] : ''; });
+      });
+      var url = API_SHEETS + '/' + CONFIG.SPREADSHEET_ID + '/values/' + encodeURIComponent(nombreHoja) +
+        '!A1:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS';
+      return apiFetch_(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: filas }) });
+    });
+  }
+
+  SERVICIOS.listarChecklistPorCaso = function (idCaso) {
+    return sheetLeerObjetos_(SHEETS.DOCUMENTOS_CASO).then(function (docs) {
+      return docs.filter(function (d) { return d.ID_Caso === idCaso; }).sort(function (a, b) { return a.Categoria.localeCompare(b.Categoria); });
+    });
+  };
+
+  SERVICIOS.agregarDocumentoAdicional = function (idCaso, nombreDocumento, categoria) {
+    return buscarFilaPor_(SHEETS.CASOS, 'ID_Caso', idCaso).then(function (caso) {
+      if (!caso) throw new Error('Caso ' + idCaso + ' no encontrado.');
+      var subcarpetas = caso.Subcarpetas_JSON ? JSON.parse(caso.Subcarpetas_JSON) : {};
+      return generarIdSecuencial_('DOC', SHEETS.DOCUMENTOS_CASO, 'ID_Registro').then(function (idRegistro) {
+        return sheetAppendObjeto_(SHEETS.DOCUMENTOS_CASO, {
+          ID_Registro: idRegistro, ID_Caso: idCaso, ID_Item_Catalogo: '', Categoria: categoria, Nombre_Documento: nombreDocumento,
+          Condicion_Adicional: 'Agregado manualmente por ' + state.usuario.email, Carpeta_Drive_Id: subcarpetas[categoria] || '',
+          Estado: ESTADO_DOCUMENTO.PENDIENTE, Version: 0, Drive_File_Id: '', URL_Drive: '', Nombre_Archivo: '',
+          Fecha_Carga: '', Cargado_Por: '', Es_Personalizado: true
+        }).then(function () { return registrarCambio_(idCaso, 'Caso', 'edicion', 'Ítem de checklist agregado: ' + nombreDocumento); })
+          .then(function () { return SERVICIOS.listarChecklistPorCaso(idCaso); });
+      });
+    });
+  };
+
+  function extensionDesdeMime_(mimeType, nombreOriginal) {
+    if (nombreOriginal && nombreOriginal.indexOf('.') !== -1) return nombreOriginal.split('.').pop();
+    var mapa = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/heic': 'heic' };
+    return mapa[mimeType] || 'dat';
+  }
+
+  SERVICIOS.subirDocumento = function (idRegistro, base64Data, mimeType, nombreOriginal, sobrescribir) {
+    return buscarFilaPor_(SHEETS.DOCUMENTOS_CASO, 'ID_Registro', idRegistro).then(function (registro) {
+      if (!registro) throw new Error('Ítem de checklist ' + idRegistro + ' no encontrado.');
+      if (!registro.Carpeta_Drive_Id) throw new Error('Este ítem no tiene una carpeta de Drive asociada.');
+
+      var nombreBase = registro.ID_Caso + '_' + sanitizarTexto_(registro.Nombre_Documento);
+      var versionNueva = sobrescribir ? registro.Version : (Number(registro.Version) || 0) + 1;
+
+      var subida;
+      if (sobrescribir && registro.Drive_File_Id) {
+        subida = driveSobrescribirBase64_(registro.Drive_File_Id, base64Data, mimeType);
+      } else {
+        var nombreFinal = nombreBase + '_v' + versionNueva + '.' + extensionDesdeMime_(mimeType, nombreOriginal);
+        subida = driveSubirBase64_(registro.Carpeta_Drive_Id, base64Data, mimeType, nombreFinal);
+      }
+
+      return subida.then(function (resultado) {
+        return sheetActualizarPorId_(SHEETS.DOCUMENTOS_CASO, 'ID_Registro', idRegistro, {
+          Estado: ESTADO_DOCUMENTO.CARGADO, Version: versionNueva, Drive_File_Id: resultado.id,
+          URL_Drive: resultado.webViewLink || ('https://drive.google.com/file/d/' + resultado.id + '/view'),
+          Nombre_Archivo: resultado.name, Fecha_Carga: formatearFechaHoraISO_(new Date()), Cargado_Por: state.usuario.email
+        });
+      }).then(function () {
+        return registrarCambio_(idRegistro, 'Documento', sobrescribir ? 'sobrescritura' : 'carga_documento',
+          (sobrescribir ? 'Archivo sobrescrito' : 'Nueva versión v' + versionNueva) + ' — ' + registro.Nombre_Documento);
+      }).then(function () { return SERVICIOS.listarChecklistPorCaso(registro.ID_Caso); });
+    });
+  };
+
+  SERVICIOS.marcarNoAplica = function (idRegistro, motivo) {
+    return buscarFilaPor_(SHEETS.DOCUMENTOS_CASO, 'ID_Registro', idRegistro).then(function (registro) {
+      if (!registro) throw new Error('Ítem ' + idRegistro + ' no encontrado.');
+      return sheetActualizarPorId_(SHEETS.DOCUMENTOS_CASO, 'ID_Registro', idRegistro, { Estado: ESTADO_DOCUMENTO.NO_APLICA })
+        .then(function () { return registrarCambio_(idRegistro, 'Documento', 'edicion', 'Marcado como no aplica. Motivo: ' + (motivo || '—')); })
+        .then(function () { return SERVICIOS.listarChecklistPorCaso(registro.ID_Caso); });
+    });
+  };
+
+  // ── OCR ──────────────────────────────────────────────────────────────
+
+  var ETIQUETAS_FORMATO_ZENER = {
+    APR_A_Cargo: ['APR A CARGO'], Dependencia: ['Dependencia'], Nombre_Empresa: ['Nombre de empresa'],
+    RUT_Trabajador: ['RUT Trabajador'], Nombre_Trabajador: ['Nombre Trabajador'], Cargo: ['Cargo'],
+    Region: ['Región', 'Region'], Supervisor_A_Cargo: ['Supervisor a cargo'], Tipo_Servicio: ['Tipo de servicio'],
+    Proyecto: ['Proyecto'], Cliente: ['Cliente'], Fecha_Contrato: ['Fecha contrato'], Edad: ['Edad'],
+    Legalidad: ['Legalidad'], Tipo_Siniestro: ['Tipo siniestro'], Calificacion: ['Calificación (STP/CTP)', 'Calificacion (STP/CTP)'],
+    Direccion: ['Dirección del accidente', 'Direccion del accidente'], Comuna: ['Comuna'], Ciudad: ['Ciudad'],
+    Hora_Siniestro: ['Hora Siniestro'], Fecha_Siniestro: ['Fecha Siniestro'], Dias_Reposo: ['Días de reposo', 'Dias de reposo'],
+    Fecha_Inicio_Reposo: ['Fecha inicio reposo'], Hora_Ingreso_Turno: ['Hora de ingreso al turno'],
+    Horas_Trabajo_Al_Momento: ['Horas de trabajo al momento del acc.', 'Horas de trabajo al momento del acc']
+  };
+  var ETIQUETA_DESCRIPCION = 'Descripción del accidente';
+
+  function buscarValorPorEtiqueta_(lineas, etiquetas) {
+    for (var i = 0; i < lineas.length; i++) {
+      var linea = lineas[i];
+      for (var j = 0; j < etiquetas.length; j++) {
+        var etiqueta = etiquetas[j];
+        var idx = linea.toLowerCase().indexOf(etiqueta.toLowerCase());
+        if (idx === -1) continue;
+        var resto = linea.substring(idx + etiqueta.length).replace(/^[:\s]+/, '').trim();
+        if (resto.length > 0 && resto.length < 120) return resto;
+        if (i + 1 < lineas.length) {
+          var siguiente = lineas[i + 1];
+          var esOtraEtiqueta = Object.keys(ETIQUETAS_FORMATO_ZENER).some(function (c) {
+            return ETIQUETAS_FORMATO_ZENER[c].some(function (e) { return siguiente.toLowerCase().indexOf(e.toLowerCase()) === 0; });
+          });
+          if (!esOtraEtiqueta) return siguiente;
+        }
+      }
+    }
+    return '';
+  }
+
+  function buscarParrafoDespuesDe_(lineas, etiqueta) {
+    for (var i = 0; i < lineas.length; i++) {
+      if (lineas[i].toLowerCase().indexOf(etiqueta.toLowerCase()) !== -1) {
+        var parrafo = [];
+        for (var j = i + 1; j < lineas.length && j < i + 9; j++) {
+          if (lineas[j].toLowerCase().indexOf('lista de hechos') !== -1) break;
+          parrafo.push(lineas[j]);
+        }
+        return parrafo.join(' ');
+      }
+    }
+    return '';
+  }
+
+  function parsearCamposFormatoZener_(texto) {
+    var lineas = texto.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 0; });
+    var campos = {};
+    Object.keys(ETIQUETAS_FORMATO_ZENER).forEach(function (campo) {
+      campos[campo] = buscarValorPorEtiqueta_(lineas, ETIQUETAS_FORMATO_ZENER[campo]);
+    });
+    campos.Descripcion_Accidente = buscarParrafoDespuesDe_(lineas, ETIQUETA_DESCRIPCION);
+    return campos;
+  }
+
+  SERVICIOS.ocrExtraerDatosDesdeInforme = function (base64Data, mimeType, nombreArchivo) {
+    return driveOcrExtraerTexto_(base64Data, mimeType).then(function (texto) {
+      return { campos: parsearCamposFormatoZener_(texto), textoReconocidoLength: texto.length };
+    });
+  };
+
+  // ── Exportación CSV / ZIP ───────────────────────────────────────────
+
+  function generarCSVDeFilas_(filas) {
+    return filas.map(function (fila) {
+      return fila.map(function (celda) {
+        var texto = (celda === null || celda === undefined) ? '' : String(celda);
+        if (texto.indexOf('"') !== -1 || texto.indexOf(',') !== -1 || texto.indexOf('\n') !== -1) {
+          texto = '"' + texto.replace(/"/g, '""') + '"';
+        }
+        return texto;
+      }).join(',');
+    }).join('\r\n');
+  }
+
+  SERVICIOS.exportarRespaldoCompletoZIP = function () {
+    var hojas = [SHEETS.CASOS, SHEETS.MEDIDAS, SHEETS.DOCUMENTOS_CASO, SHEETS.HISTORIAL];
+    return Promise.all(hojas.map(function (h) {
+      return sheetGetAll_(h).then(function (filas) { return { nombre: h, csv: generarCSVDeFilas_(filas) }; });
+    })).then(function (resultados) {
+      var zip = new JSZip();
+      resultados.forEach(function (r) { zip.file(r.nombre + '.csv', r.csv); });
+      return zip.generateAsync({ type: 'base64' });
+    }).then(function (base64) {
+      return { nombreArchivo: 'respaldo_SST_' + hoyISO_() + '.zip', base64: base64 };
+    }).then(function (res) {
+      return registrarCambio_('TODAS', 'Configuracion', 'edicion', 'Exportación de respaldo solicitada').then(function () { return res; });
+    });
+  };
+
+  // ── Configuración inicial (setup, una sola vez) ─────────────────────
+
+  SERVICIOS.crearEstructuraInicial_ = function (nombreAdmin, emailAdmin) {
+    var sheetsBody = {
+      properties: { title: 'SST - Control de Accidentes - DB' },
+      sheets: Object.keys(DEFINICION_HOJAS).map(function (nombre) { return { properties: { title: nombre } }; })
+    };
+
+    var spreadsheetId, spreadsheetUrl, rootFolderId;
+
+    return apiFetch_(API_SHEETS, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sheetsBody) })
+      .then(function (r) { return r.json(); })
+      .then(function (creada) {
+        spreadsheetId = creada.spreadsheetId;
+        spreadsheetUrl = creada.spreadsheetUrl;
+        CONFIG.SPREADSHEET_ID = spreadsheetId; // se necesita ya para los helpers de sheetXxx_ de aquí en adelante
+
+        var data = Object.keys(DEFINICION_HOJAS).map(function (nombre) {
+          return { range: nombre + '!A1', values: [DEFINICION_HOJAS[nombre]] };
+        });
+        return apiFetch_(API_SHEETS + '/' + spreadsheetId + '/values:batchUpdate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ valueInputOption: 'RAW', data: data })
+        });
+      })
+      .then(function () {
+        var filasCatalogo = CATALOGO_V1.map(function (it) { return [it[0], 'v1', it[1], it[2], it[3], it[4], it[5], it[6], it[7], true]; });
+        return sheetAppendVarias_(SHEETS.CATALOGO, filasCatalogo.map(function (fila) {
+          var obj = {}; DEFINICION_HOJAS.Catalogo_Documentos.forEach(function (h, i) { obj[h] = fila[i]; }); return obj;
+        }));
+      })
+      .then(function () {
+        return sheetAppendVarias_(SHEETS.CONFIGURACION, [
+          { Clave: 'NOMBRE_EMPRESA', Valor: 'ZENER AUSTRAL LTDA.' },
+          { Clave: 'NOMBRE_SISTEMA', Valor: 'Control de Accidentes SST' },
+          { Clave: 'LOGO_URL', Valor: '' },
+          { Clave: 'COLOR_PRIMARIO', Valor: '#0B2A3E' },
+          { Clave: 'COLOR_ACENTO', Valor: '#E4772E' },
+          { Clave: 'VERSION_CATALOGO_ACTIVA', Valor: 'v1' }
+        ]);
+      })
+      .then(function () {
+        return sheetAppendObjeto_(SHEETS.USUARIOS, { Email: emailAdmin, Nombre: nombreAdmin, Rol: 'administrador', Activo: true });
+      })
+      .then(function () {
+        return apiFetch_(API_DRIVE + '/files?fields=id', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'SST - Control de Accidentes', mimeType: 'application/vnd.google-apps.folder' })
+        });
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (carpeta) {
+        rootFolderId = carpeta.id;
+        CONFIG.ROOT_FOLDER_ID = rootFolderId;
+        return { spreadsheetId: spreadsheetId, spreadsheetUrl: spreadsheetUrl, rootFolderId: rootFolderId };
+      });
+  };
+</script>
+
+  <!-- ── JavaScript_Dashboard.html ── -->
+  <script>
+  function cargarDashboard() {
+    elTopbarTitulo('Dashboard');
+    elContenido().innerHTML = '<div class="vacio"><span class="spinner" style="border-top-color:var(--color-primario); border-color:var(--borde);"></span> Cargando indicadores…</div>';
+
+    Promise.all([llamar('obtenerKPIsDashboard'), llamar('obtenerDesgloseDashboard')])
+      .then(function (res) { renderDashboard(res[0], res[1]); })
+      .catch(mostrarError);
+  }
+
+  function renderDashboard(kpis, desglose) {
+    var tarjetas = [
+      { valor: kpis.total_accidentes, etiqueta: 'Total accidentes', clase: '' },
+      { valor: kpis.accidentes_abiertos, etiqueta: 'Accidentes abiertos', clase: 'alerta' },
+      { valor: kpis.accidentes_cerrados, etiqueta: 'Accidentes cerrados', clase: '' },
+      { valor: kpis.medidas_abiertas, etiqueta: 'Medidas abiertas', clase: 'alerta' },
+      { valor: kpis.medidas_vencidas, etiqueta: 'Medidas vencidas', clase: 'critico' },
+      { valor: kpis.documentos_pendientes, etiqueta: 'Documentos pendientes', clase: 'critico' }
+    ];
+
+    var html = '<div class="grid-kpi">' + tarjetas.map(function (t) {
+      return '<div class="tarjeta kpi ' + t.clase + '"><div class="kpi-valor">' + t.valor + '</div>' +
+        '<div class="kpi-etiqueta">' + t.etiqueta + '</div></div>';
+    }).join('') + '</div>';
+
+    html += '<div class="form-grid" style="grid-template-columns: 1fr 1fr;">';
+    html += '<div class="tarjeta">' + barraDesglose_('Casos por cliente', desglose.por_cliente) + '</div>';
+    html += '<div class="tarjeta">' + barraDesglose_('Casos por gravedad', desglose.por_gravedad) + '</div>';
+    html += '</div>';
+
+    html += '<div class="seccion-titulo"><h2>Accesos rápidos</h2></div>';
+    html += '<div style="display:flex; gap:10px;">';
+    html += '<button class="btn btn-secundario" onclick="navegarA(\'casos\')">Ver todos los casos</button>';
+    if (puede('crear_caso')) html += '<button class="btn btn-primario" onclick="navegarA(\'nuevo-caso\')">+ Registrar accidente</button>';
+    if (puede('exportar_csv')) html += '<button class="btn btn-secundario" onclick="exportarRespaldo(this)">Exportar respaldo (ZIP)</button>';
+    html += '</div>';
+
+    elContenido().innerHTML = html;
+  }
+
+  function barraDesglose_(titulo, mapa) {
+    var claves = Object.keys(mapa || {}).filter(function (k) { return k && k !== 'undefined'; });
+    var total = claves.reduce(function (s, k) { return s + mapa[k]; }, 0) || 1;
+    var html = '<h3 style="margin-bottom:14px;">' + titulo + '</h3>';
+    if (claves.length === 0) {
+      html += '<p style="color:var(--texto-tenue); font-size:13px;">Sin datos aún.</p>';
+      return html;
+    }
+    claves.sort(function (a, b) { return mapa[b] - mapa[a]; });
+    html += claves.map(function (k) {
+      var pct = Math.round((mapa[k] / total) * 100);
+      return '<div style="margin-bottom:10px;">' +
+        '<div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">' +
+          '<span>' + escapeHtml(k) + '</span><span class="mono">' + mapa[k] + '</span>' +
+        '</div>' +
+        '<div class="barra-progreso"><div class="barra-progreso-relleno" style="width:' + pct + '%;"></div></div>' +
+      '</div>';
+    }).join('');
+    return html;
+  }
+
+  function exportarRespaldo(boton) {
+    conSpinner(boton, llamar('exportarRespaldoCompletoZIP')).then(function (res) {
+      descargarBase64_(res.base64, res.nombreArchivo, 'application/zip');
+      mostrarToast('Respaldo generado: ' + res.nombreArchivo, 'exito');
+    }).catch(mostrarError);
+  }
+
+  function descargarBase64_(base64, nombreArchivo, mimeType) {
+    var link = document.createElement('a');
+    link.href = 'data:' + mimeType + ';base64,' + base64;
+    link.download = nombreArchivo;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+</script>
+
+  <!-- ── JavaScript_Casos.html ── -->
+  <script>
+  function cargarCasos() {
+    elTopbarTitulo('Casos');
+    elContenido().innerHTML = '<div class="vacio">Cargando…</div>';
+    llamar('listarCasos', state.filtrosCasos).then(function (casos) {
+      state.casos = casos;
+      renderCasos();
+    }).catch(mostrarError);
+  }
+
+  function renderCasos() {
+    var f = state.filtrosCasos;
+    var html = '<div class="filtros-barra">' +
+      '<input type="text" id="f-texto" placeholder="Buscar por nombre, RUT o N° de caso…" value="' + escapeHtml(f.texto) + '" style="width:260px;">' +
+      '<select id="f-estado">' +
+        opcion_('', 'Todos los estados', f.estado) +
+        opcion_('abierto', 'Abierto', f.estado) +
+        opcion_('en_investigacion', 'En investigación', f.estado) +
+        opcion_('cerrado', 'Cerrado', f.estado) +
+      '</select>' +
+      '<select id="f-gravedad">' +
+        opcion_('', 'Todas las gravedades', f.gravedad) +
+        opcion_('LEVE', 'Leve', f.gravedad) +
+        opcion_('GRAVE', 'Grave · NT142', f.gravedad) +
+        opcion_('FATAL', 'Fatal', f.gravedad) +
+      '</select>' +
+      '<input type="text" id="f-cliente" placeholder="Cliente" value="' + escapeHtml(f.cliente) + '" style="width:140px;" list="lista-clientes">' +
+      '<button class="btn btn-secundario" onclick="aplicarFiltrosCasos()">Filtrar</button>' +
+      (puede('crear_caso') ? '<button class="btn btn-primario" style="margin-left:auto;" onclick="navegarA(\'nuevo-caso\')">+ Registrar accidente</button>' : '') +
+    '</div>';
+
+    if (state.casos.length === 0) {
+      html += '<div class="tarjeta vacio"><h3>Sin casos que coincidan</h3><p>Ajusta los filtros o registra un nuevo accidente.</p></div>';
+      elContenido().innerHTML = html;
+      return;
+    }
+
+    html += '<div class="tarjeta" style="padding:0;">' +
+      '<table class="tabla"><thead><tr>' +
+        '<th>N° Caso</th><th>Trabajador</th><th>Cliente</th><th>Fecha siniestro</th>' +
+        '<th>Gravedad</th><th>Estado</th>' +
+      '</tr></thead><tbody>' +
+      state.casos.map(function (c) {
+        return '<tr onclick="navegarA(\'caso-detalle\',\'' + c.ID_Caso + '\')">' +
+          '<td class="mono">' + escapeHtml(c.ID_Caso) + '</td>' +
+          '<td>' + escapeHtml(c.Nombre_Trabajador) + '</td>' +
+          '<td>' + escapeHtml(c.Cliente) + '</td>' +
+          '<td>' + escapeHtml(c.Fecha_Siniestro) + '</td>' +
+          '<td>' + pillGravedad(c.Gravedad) + '</td>' +
+          '<td>' + pillEstadoCaso(c.Estado_Caso) + '</td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+
+    elContenido().innerHTML = html;
+    document.getElementById('lista-clientes') || agregarDatalistClientes_();
+  }
+
+  function agregarDatalistClientes_() {
+    var dl = document.createElement('datalist');
+    dl.id = 'lista-clientes';
+    dl.innerHTML = CLIENTES_SUGERIDOS.map(function (c) { return '<option value="' + c + '">'; }).join('');
+    document.body.appendChild(dl);
+  }
+
+  function opcion_(valor, etiqueta, actual) {
+    return '<option value="' + valor + '"' + (valor === actual ? ' selected' : '') + '>' + etiqueta + '</option>';
+  }
+
+  function aplicarFiltrosCasos() {
+    state.filtrosCasos = {
+      texto: document.getElementById('f-texto').value.trim(),
+      estado: document.getElementById('f-estado').value,
+      gravedad: document.getElementById('f-gravedad').value,
+      cliente: document.getElementById('f-cliente').value.trim()
+    };
+    cargarCasos();
+  }
+</script>
+
+  <!-- ── JavaScript_NuevoCaso.html ── -->
+  <script>
+  function renderNuevoCaso() {
+    elTopbarTitulo('Nuevo caso');
+    state.ocrPendiente = null;
+
+    var html = '';
+
+    html += '<div class="tarjeta" style="margin-bottom:20px;">' +
+      '<h3 style="margin-bottom:4px;">Autocompletar desde PDF (opcional)</h3>' +
+      '<p style="font-size:12.5px; color:var(--texto-secundario); margin-bottom:12px;">' +
+        'Sube el informe de investigación (formato ZN-FT-SST-050) y el sistema intentará reconocer los datos ' +
+        'del trabajador y del siniestro. El árbol de causas no se procesa: el PDF completo se archiva tal cual ' +
+        'en la carpeta del caso al guardar. Siempre revisa los datos antes de guardar.' +
+      '</p>' +
+      '<div class="zona-carga" onclick="document.getElementById(\'input-ocr-pdf\').click()" id="zona-ocr">' +
+        '&#8593; Haz clic para seleccionar el PDF del informe' +
+      '</div>' +
+      '<input type="file" id="input-ocr-pdf" accept="application/pdf" style="display:none;" onchange="manejarOCR(this)">' +
+    '</div>';
+
+    html += '<form id="form-nuevo-caso" onsubmit="return false;">';
+
+    html += seccionCampos_('Datos de la empresa y contrato', [
+      campoTexto_('Dependencia', 'Dependencia', { list: 'dl-dependencia' }),
+      campoTexto_('Nombre_Empresa', 'Nombre de empresa'),
+      campoTexto_('Cliente', 'Cliente', { list: 'dl-clientes' }),
+      campoTexto_('Proyecto', 'Proyecto'),
+      campoTexto_('Tipo_Servicio', 'Tipo de servicio')
+    ]);
+
+    html += seccionCampos_('Datos del trabajador', [
+      campoTexto_('RUT_Trabajador', 'RUT trabajador'),
+      campoTexto_('Nombre_Trabajador', 'Nombre trabajador', { requerido: true }),
+      campoTexto_('Cargo', 'Cargo'),
+      campoTexto_('Region', 'Región', { list: 'dl-regiones' }),
+      campoFecha_('Fecha_Contrato', 'Fecha contrato'),
+      campoNumero_('Edad', 'Edad'),
+      campoTexto_('Legalidad', 'Legalidad'),
+      campoTexto_('Supervisor_A_Cargo', 'Supervisor a cargo')
+    ]);
+
+    html += seccionCampos_('Clasificación del siniestro', [
+      campoTexto_('Tipo_Siniestro', 'Tipo de siniestro', { list: 'dl-tipo-siniestro' }),
+      campoTexto_('Calificacion', 'Calificación (STP/CTP)', { list: 'dl-calificacion' }),
+      campoFecha_('Fecha_Siniestro', 'Fecha siniestro', { requerido: true }),
+      campoHora_('Hora_Siniestro', 'Hora siniestro'),
+      campoTexto_('Direccion', 'Dirección del accidente', { span: 2 }),
+      campoTexto_('Comuna', 'Comuna'),
+      campoTexto_('Ciudad', 'Ciudad'),
+      campoHora_('Hora_Ingreso_Turno', 'Hora ingreso al turno'),
+      campoTexto_('Horas_Trabajo_Al_Momento', 'Horas trabajadas al momento', { placeholder: 'hh:mm' }),
+      campoNumero_('Dias_Reposo', 'Días de reposo'),
+      campoFecha_('Fecha_Inicio_Reposo', 'Fecha inicio reposo'),
+      campoSelect_('Gravedad', 'Gravedad', [
+        ['', 'Selecciona…'], ['LEVE', 'Leve'], ['GRAVE', 'Grave (MINSAL–NT142)'], ['FATAL', 'Fatal']
+      ], { requerido: true })
+    ]);
+
+    html += seccionCampos_('Descripción e investigación', [
+      campoTextarea_('Descripcion_Accidente', 'Descripción del accidente', { span: 3 }),
+      campoTextarea_('Causa_Raiz', 'Causa raíz (texto libre)', { span: 3 })
+    ]);
+
+    html += seccionCampos_('Responsables', [
+      campoTexto_('APR_A_Cargo', 'APR a cargo'),
+      campoTexto_('Nombre_Redacta', 'Redacta'),
+      campoTexto_('Nombre_Revisa', 'Revisa'),
+      campoTexto_('Nombre_Aprueba', 'Aprueba'),
+      campoTextarea_('Observaciones', 'Observaciones', { span: 3 })
+    ]);
+
+    html += '<div style="display:flex; gap:10px; margin-top:24px;">' +
+      '<button type="button" class="btn btn-primario" onclick="guardarNuevoCaso(this)">Crear caso</button>' +
+      '<button type="button" class="btn btn-secundario" onclick="navegarA(\'casos\')">Cancelar</button>' +
+    '</div>';
+
+    html += '</form>';
+
+    html += '<datalist id="dl-dependencia"><option value="Propio"><option value="Contratista"></datalist>';
+    html += '<datalist id="dl-clientes">' + CLIENTES_SUGERIDOS.map(function (c) { return '<option value="' + c + '">'; }).join('') + '</datalist>';
+    html += '<datalist id="dl-regiones">' + REGIONES_CHILE.map(function (r) { return '<option value="' + r + '">'; }).join('') + '</datalist>';
+    html += '<datalist id="dl-tipo-siniestro"><option value="Accidente de Trabajo"><option value="Accidente de Trayecto"></datalist>';
+    html += '<datalist id="dl-calificacion"><option value="STP"><option value="CTP"></datalist>';
+
+    elContenido().innerHTML = html;
+  }
+
+  // ── Helpers de construcción de campos ───────────────────────────────────
+
+  function seccionCampos_(titulo, camposHtml) {
+    return '<div class="seccion-titulo"><h2>' + titulo + '</h2></div>' +
+      '<div class="form-grid">' + camposHtml.join('') + '</div>';
+  }
+
+  function campoTexto_(id, label, opts) {
+    opts = opts || {};
+    var span = opts.span ? ' span-' + opts.span : '';
+    return '<div class="campo' + span + '"><label>' + label + (opts.requerido ? ' *' : '') + '</label>' +
+      '<input type="text" id="campo-' + id + '"' +
+        (opts.list ? ' list="' + opts.list + '"' : '') +
+        (opts.placeholder ? ' placeholder="' + opts.placeholder + '"' : '') + '></div>';
+  }
+
+  function campoNumero_(id, label, opts) {
+    opts = opts || {};
+    return '<div class="campo"><label>' + label + '</label><input type="number" id="campo-' + id + '"></div>';
+  }
+
+  function campoFecha_(id, label, opts) {
+    opts = opts || {};
+    return '<div class="campo"><label>' + label + (opts.requerido ? ' *' : '') + '</label><input type="date" id="campo-' + id + '"></div>';
+  }
+
+  function campoHora_(id, label) {
+    return '<div class="campo"><label>' + label + '</label><input type="time" id="campo-' + id + '"></div>';
+  }
+
+  function campoTextarea_(id, label, opts) {
+    opts = opts || {};
+    var span = opts.span ? ' span-' + opts.span : '';
+    return '<div class="campo' + span + '"><label>' + label + '</label><textarea id="campo-' + id + '"></textarea></div>';
+  }
+
+  function campoSelect_(id, label, opciones, opts) {
+    opts = opts || {};
+    return '<div class="campo"><label>' + label + (opts.requerido ? ' *' : '') + '</label>' +
+      '<select id="campo-' + id + '">' +
+        opciones.map(function (o) { return '<option value="' + o[0] + '">' + o[1] + '</option>'; }).join('') +
+      '</select></div>';
+  }
+
+  var CAMPOS_FORM_CASO = [
+    'Dependencia', 'Nombre_Empresa', 'Cliente', 'Proyecto', 'Tipo_Servicio',
+    'RUT_Trabajador', 'Nombre_Trabajador', 'Cargo', 'Region', 'Fecha_Contrato', 'Edad', 'Legalidad', 'Supervisor_A_Cargo',
+    'Tipo_Siniestro', 'Calificacion', 'Fecha_Siniestro', 'Hora_Siniestro', 'Direccion', 'Comuna', 'Ciudad',
+    'Hora_Ingreso_Turno', 'Horas_Trabajo_Al_Momento', 'Dias_Reposo', 'Fecha_Inicio_Reposo', 'Gravedad',
+    'Descripcion_Accidente', 'Causa_Raiz', 'APR_A_Cargo', 'Nombre_Redacta', 'Nombre_Revisa', 'Nombre_Aprueba', 'Observaciones'
+  ];
+
+  function recolectarFormCaso_() {
+    var datos = {};
+    CAMPOS_FORM_CASO.forEach(function (campo) {
+      var el = document.getElementById('campo-' + campo);
+      if (el) datos[campo] = el.value.trim ? el.value.trim() : el.value;
+    });
+    return datos;
+  }
+
+  function pintarFormCaso_(campos) {
+    var rellenados = 0;
+    Object.keys(campos).forEach(function (campo) {
+      var el = document.getElementById('campo-' + campo);
+      if (el && campos[campo]) {
+        el.value = campos[campo];
+        rellenados++;
+      }
+    });
+    return rellenados;
+  }
+
+  // ── OCR ──────────────────────────────────────────────────────────────
+
+  function manejarOCR(input) {
+    var file = input.files[0];
+    if (!file) return;
+
+    var zona = document.getElementById('zona-ocr');
+    zona.innerHTML = '<span class="spinner" style="border-top-color:var(--color-acento); border-color:var(--borde);"></span> Leyendo PDF y reconociendo texto…';
+
+    leerArchivoBase64(file).then(function (archivo) {
+      state.ocrPendiente = archivo; // se reusa para archivar el PDF completo al guardar el caso
+      return llamar('ocrExtraerDatosDesdeInforme', archivo.base64, archivo.mimeType, archivo.nombre);
+    }).then(function (res) {
+      var n = pintarFormCaso_(res.campos);
+      zona.innerHTML = '&#10003; PDF procesado — se completaron ' + n + ' campos automáticamente. Revísalos antes de guardar.';
+      mostrarToast('Se autocompletaron ' + n + ' campos desde el PDF. Revísalos antes de guardar.', 'exito');
+    }).catch(function (err) {
+      zona.innerHTML = '&#8593; Haz clic para seleccionar el PDF del informe';
+      mostrarError('No se pudo procesar el PDF: ' + (err.message || err) + '. Puedes llenar el formulario manualmente.');
+    });
+  }
+
+  // ── Guardar ──────────────────────────────────────────────────────────
+
+  function guardarNuevoCaso(boton) {
+    var datos = recolectarFormCaso_();
+
+    if (!datos.Nombre_Trabajador) return mostrarError('Falta el nombre del trabajador.');
+    if (!datos.Fecha_Siniestro) return mostrarError('Falta la fecha del siniestro.');
+    if (!datos.Gravedad) return mostrarError('Debes seleccionar la gravedad — determina qué documentos se exigen.');
+
+    conSpinner(boton, llamar('crearCaso', datos)).then(function (resultado) {
+      mostrarToast('Caso ' + resultado.caso.ID_Caso + ' creado. Carpeta y checklist generados en Drive.', 'exito');
+
+      if (state.ocrPendiente) {
+        var itemInforme = resultado.documentos.filter(function (d) { return d.ID_Item_Catalogo === 'INV-01'; })[0];
+        if (itemInforme) {
+          llamar('subirDocumento', itemInforme.ID_Registro, state.ocrPendiente.base64, state.ocrPendiente.mimeType, state.ocrPendiente.nombre, false)
+            .then(function () { mostrarToast('Informe de investigación archivado en la carpeta del caso.', 'exito'); })
+            .catch(function (err) { mostrarError('El caso se creó, pero el PDF no se pudo archivar automáticamente: ' + (err.message || err)); });
+        }
+      }
+
+      navegarA('caso-detalle', resultado.caso.ID_Caso);
+    }).catch(mostrarError);
+  }
+</script>
+
+  <!-- ── JavaScript_CasoDetalle.html ── -->
+  <script>
+  function cargarCasoDetalle(idCaso) {
+    elTopbarTitulo('Caso ' + idCaso);
+    elContenido().innerHTML = '<div class="vacio">Cargando caso…</div>';
+    state.tabCasoActual = 'datos';
+
+    llamar('obtenerCaso', idCaso).then(function (data) {
+      state.casoActual = data;
+      renderCasoDetalle();
+    }).catch(mostrarError);
+  }
+
+  function renderCasoDetalle() {
+    var d = state.casoActual;
+    var c = d.caso;
+
+    var pctDocs = calcularPctDocumentos_(d.documentos);
+
+    var html = '<div class="tarjeta" style="margin-bottom:18px; display:flex; justify-content:space-between; align-items:center;">' +
+      '<div>' +
+        '<h1 style="margin-bottom:6px;">' + escapeHtml(c.Nombre_Trabajador) + ' <span class="mono" style="font-size:14px; color:var(--texto-tenue);">· ' + escapeHtml(c.ID_Caso) + '</span></h1>' +
+        '<div style="display:flex; gap:8px; align-items:center;">' + pillEstadoCaso(c.Estado_Caso) + pillGravedad(c.Gravedad) +
+          '<span style="font-size:12.5px; color:var(--texto-secundario);">' + escapeHtml(c.Cliente || '') + ' · ' + escapeHtml(c.Fecha_Siniestro || '') + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex; gap:8px;">' +
+        (c.URL_Carpeta_Drive ? '<a class="btn btn-secundario" href="' + c.URL_Carpeta_Drive + '" target="_blank">Abrir carpeta en Drive</a>' : '') +
+        botonesEstadoCaso_(c) +
+      '</div>' +
+    '</div>';
+
+    html += '<div class="tabs">' +
+      tabBtn_('datos', 'Datos generales') +
+      tabBtn_('medidas', 'Medidas correctivas (' + d.medidas.length + ')') +
+      tabBtn_('documentos', 'Documentos (' + pctDocs.cargados + '/' + pctDocs.total + ')') +
+      tabBtn_('historial', 'Historial') +
+    '</div>';
+
+    html += '<div id="tab-contenido"></div>';
+
+    elContenido().innerHTML = html;
+    renderTabActual();
+  }
+
+  function tabBtn_(id, label) {
+    return '<div class="tab' + (state.tabCasoActual === id ? ' activo' : '') + '" onclick="cambiarTabCaso(\'' + id + '\', this)">' + label + '</div>';
+  }
+
+  function cambiarTabCaso(id, el) {
+    state.tabCasoActual = id;
+    document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('activo'); });
+    el.classList.add('activo');
+    renderTabActual();
+  }
+
+  function renderTabActual() {
+    var cont = document.getElementById('tab-contenido');
+    if (state.tabCasoActual === 'datos') cont.innerHTML = renderTabDatos_();
+    else if (state.tabCasoActual === 'medidas') renderTabMedidas();
+    else if (state.tabCasoActual === 'documentos') renderTabDocumentos();
+    else if (state.tabCasoActual === 'historial') cont.innerHTML = renderTabHistorial_();
+  }
+
+  function botonesEstadoCaso_(c) {
+    if (!puede('cerrar_caso')) return '';
+    if (c.Estado_Caso === 'cerrado') {
+      return '<button class="btn btn-secundario" onclick="accionCaso(\'reabrirCaso\')">Reabrir caso</button>';
+    }
+    return '<button class="btn btn-primario" onclick="accionCaso(\'cerrarCaso\')">Cerrar caso</button>';
+  }
+
+  function accionCaso(nombreFuncion) {
+    confirmarAccion(nombreFuncion === 'cerrarCaso' ? '¿Cerrar este caso?' : '¿Reabrir este caso?').then(function (ok) {
+      if (!ok) return;
+      llamar(nombreFuncion, state.casoActual.caso.ID_Caso).then(function (data) {
+        state.casoActual = data;
+        mostrarToast('Caso actualizado.', 'exito');
+        renderCasoDetalle();
+      }).catch(mostrarError);
+    });
+  }
+
+  function calcularPctDocumentos_(documentos) {
+    var relevantes = documentos.filter(function (d) { return d.Estado !== 'no_aplica'; });
+    var cargados = relevantes.filter(function (d) { return d.Estado === 'cargado'; }).length;
+    return { cargados: cargados, total: relevantes.length };
+  }
+
+  // ── Tab: Datos generales ────────────────────────────────────────────
+
+  function renderTabDatos_() {
+    var c = state.casoActual.caso;
+    var filas = [
+      ['Dependencia', c.Dependencia], ['Nombre empresa', c.Nombre_Empresa], ['Cliente', c.Cliente],
+      ['Proyecto', c.Proyecto], ['Tipo de servicio', c.Tipo_Servicio],
+      ['RUT trabajador', c.RUT_Trabajador], ['Cargo', c.Cargo], ['Región', c.Region],
+      ['Fecha contrato', c.Fecha_Contrato], ['Edad', c.Edad], ['Legalidad', c.Legalidad], ['Supervisor a cargo', c.Supervisor_A_Cargo],
+      ['Tipo de siniestro', c.Tipo_Siniestro], ['Calificación', c.Calificacion],
+      ['Fecha siniestro', c.Fecha_Siniestro], ['Hora siniestro', c.Hora_Siniestro],
+      ['Dirección', c.Direccion], ['Comuna', c.Comuna], ['Ciudad', c.Ciudad],
+      ['Hora ingreso turno', c.Hora_Ingreso_Turno], ['Horas trabajadas al momento', c.Horas_Trabajo_Al_Momento],
+      ['Días de reposo', c.Dias_Reposo], ['Fecha inicio reposo', c.Fecha_Inicio_Reposo],
+      ['APR a cargo', c.APR_A_Cargo], ['Redacta', c.Nombre_Redacta], ['Revisa', c.Nombre_Revisa], ['Aprueba', c.Nombre_Aprueba],
+      ['Versión de catálogo usada', c.Version_Catalogo_Usada], ['Registrado por', c.Registrado_Por]
+    ];
+
+    var html = '<div class="tarjeta"><div class="form-grid">' +
+      filas.map(function (f) {
+        return '<div class="campo"><label>' + f[0] + '</label><div>' + (escapeHtml(f[1]) || '—') + '</div></div>';
+      }).join('') +
+    '</div>';
+
+    html += '<div class="seccion-titulo"><h3>Descripción del accidente</h3></div><p>' + (escapeHtml(c.Descripcion_Accidente) || '—') + '</p>';
+    html += '<div class="seccion-titulo"><h3>Causa raíz</h3></div><p>' + (escapeHtml(c.Causa_Raiz) || '—') + '</p>';
+    if (c.Observaciones) {
+      html += '<div class="seccion-titulo"><h3>Observaciones</h3></div><p>' + escapeHtml(c.Observaciones) + '</p>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // ── Tab: Historial ───────────────────────────────────────────────────
+
+  function renderTabHistorial_() {
+    var h = state.casoActual.historial;
+    if (h.length === 0) return '<div class="tarjeta vacio">Sin movimientos registrados aún.</div>';
+
+    return '<div class="tarjeta" style="padding:0;"><table class="tabla"><thead><tr>' +
+      '<th>Fecha</th><th>Usuario</th><th>Tipo</th><th>Acción</th><th>Detalle</th>' +
+      '</tr></thead><tbody>' +
+      h.map(function (r) {
+        return '<tr style="cursor:default;">' +
+          '<td class="mono" style="white-space:nowrap;">' + escapeHtml(r.Fecha_Hora) + '</td>' +
+          '<td>' + escapeHtml(r.Usuario) + '</td>' +
+          '<td><span class="pill pill-neutro">' + escapeHtml(r.Tipo_Referencia) + '</span></td>' +
+          '<td>' + escapeHtml(r.Accion) + '</td>' +
+          '<td style="color:var(--texto-secundario);">' + escapeHtml(r.Detalle) + '</td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+  }
+</script>
+
+  <!-- ── JavaScript_Medidas.html ── -->
+  <script>
+  function renderTabMedidas() {
+    var cont = document.getElementById('tab-contenido');
+    var medidas = state.casoActual.medidas;
+
+    var html = '<div style="display:flex; justify-content:flex-end; margin-bottom:12px;">' +
+      (puede('crear_medida') ? '<button class="btn btn-primario" onclick="abrirModalMedida()">+ Nueva medida</button>' : '') +
+    '</div>';
+
+    if (medidas.length === 0) {
+      html += '<div class="tarjeta vacio">Aún no hay medidas correctivas registradas para este caso.</div>';
+      cont.innerHTML = html;
+      return;
+    }
+
+    html += '<div class="tarjeta" style="padding:0;"><table class="tabla"><thead><tr>' +
+      '<th>Descripción</th><th>Responsable</th><th>Compromiso</th><th>Estado</th><th></th>' +
+      '</tr></thead><tbody>' +
+      medidas.map(function (m) {
+        return '<tr style="cursor:default;">' +
+          '<td style="max-width:340px;">' + escapeHtml(m.Descripcion) + '</td>' +
+          '<td>' + escapeHtml(m.Responsable) + '</td>' +
+          '<td class="mono">' + escapeHtml(m.Fecha_Compromiso) + '</td>' +
+          '<td>' + pillEstadoMedida(m.Estado_Calculado) + '</td>' +
+          '<td>' + (puede('editar_medida') && m.Estado_Calculado !== 'cerrada' ? botonesEstadoMedida_(m) : '') + '</td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+
+    cont.innerHTML = html;
+  }
+
+  function botonesEstadoMedida_(m) {
+    var opciones = ['abierta', 'en_curso', 'cerrada'].filter(function (e) { return e !== m.Estado; });
+    return '<select onchange="cambiarEstadoMedida(\'' + m.ID_Medida + '\', this.value)" style="font-size:12px; padding:4px 6px;">' +
+      '<option value="">Cambiar a…</option>' +
+      opciones.map(function (o) { return '<option value="' + o + '">' + etiquetaEstadoMedida_(o) + '</option>'; }).join('') +
+      '</select>';
+  }
+
+  function etiquetaEstadoMedida_(e) {
+    return { abierta: 'Abierta', en_curso: 'En curso', cerrada: 'Cerrada' }[e] || e;
+  }
+
+  function cambiarEstadoMedida(idMedida, nuevoEstado) {
+    if (!nuevoEstado) return;
+    llamar('actualizarMedida', idMedida, { Estado: nuevoEstado }).then(function (medidas) {
+      state.casoActual.medidas = medidas;
+      mostrarToast('Estado de la medida actualizado.', 'exito');
+      renderTabMedidas();
+    }).catch(mostrarError);
+  }
+
+  function abrirModalMedida() {
+    var fondo = document.createElement('div');
+    fondo.className = 'modal-fondo';
+    fondo.innerHTML =
+      '<div class="modal">' +
+        '<h2>Nueva medida correctiva</h2>' +
+        '<div class="campo" style="margin-bottom:10px;"><label>Descripción *</label><textarea id="m-descripcion"></textarea></div>' +
+        '<div class="campo" style="margin-bottom:10px;"><label>Responsable</label><input type="text" id="m-responsable"></div>' +
+        '<div class="campo" style="margin-bottom:10px;"><label>Fecha compromiso</label><input type="date" id="m-fecha"></div>' +
+        '<div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">' +
+          '<button class="btn btn-secundario" onclick="cerrarModal()">Cancelar</button>' +
+          '<button class="btn btn-primario" onclick="guardarMedida(this)">Guardar</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(fondo);
+  }
+
+  function guardarMedida(boton) {
+    var descripcion = document.getElementById('m-descripcion').value.trim();
+    if (!descripcion) return mostrarError('La descripción de la medida es obligatoria.');
+
+    var datos = {
+      Descripcion: descripcion,
+      Responsable: document.getElementById('m-responsable').value.trim(),
+      Fecha_Compromiso: document.getElementById('m-fecha').value
+    };
+
+    conSpinner(boton, llamar('crearMedida', state.casoActual.caso.ID_Caso, datos)).then(function (medidas) {
+      state.casoActual.medidas = medidas;
+      cerrarModal();
+      mostrarToast('Medida registrada.', 'exito');
+      state.tabCasoActual = 'medidas';
+      renderCasoDetalle(); // repinta encabezado (conteo de medidas) + tab activo correcto
+    }).catch(mostrarError);
+  }
+</script>
+
+  <!-- ── JavaScript_Documentos.html ── -->
+  <script>
+  var ETIQUETAS_CATEGORIA = {
+    Antecedentes_Trabajador: 'Antecedentes del trabajador',
+    Licencias_Medicas: 'Licencias médicas',
+    DIAT_Empresa: 'DIAT empresa',
+    DIAT_Trabajador: 'DIAT trabajador',
+    Fotografias_Evidencia: 'Fotografías y evidencia',
+    Investigacion: 'Investigación y medidas correctivas',
+    Instrumentos_Prevencion: 'Instrumentos de prevención',
+    EPP: 'Elementos de protección personal',
+    Fiscalizacion_DT_Seremi: 'Fiscalización DT / SEREMI',
+    Otros: 'Otros'
+  };
+  var ORDEN_CATEGORIAS = Object.keys(ETIQUETAS_CATEGORIA);
+
+  function renderTabDocumentos() {
+    var cont = document.getElementById('tab-contenido');
+    var docs = state.casoActual.documentos;
+    var pct = calcularPctDocumentos_(docs);
+    var pctNum = pct.total > 0 ? Math.round((pct.cargados / pct.total) * 100) : 0;
+
+    var html = '<div class="tarjeta" style="margin-bottom:16px;">' +
+      '<div style="display:flex; justify-content:space-between; margin-bottom:8px;">' +
+        '<strong>' + pct.cargados + ' de ' + pct.total + ' documentos cargados (' + pctNum + '%)</strong>' +
+        (puede('subir_documento') ? '<button class="btn btn-texto" onclick="abrirModalDocumentoAdicional()">+ Agregar ítem no listado</button>' : '') +
+      '</div>' +
+      '<div class="barra-progreso"><div class="barra-progreso-relleno" style="width:' + pctNum + '%;"></div></div>' +
+    '</div>';
+
+    var porCategoria = {};
+    docs.forEach(function (d) {
+      (porCategoria[d.Categoria] = porCategoria[d.Categoria] || []).push(d);
+    });
+
+    ORDEN_CATEGORIAS.concat(Object.keys(porCategoria).filter(function (c) { return ORDEN_CATEGORIAS.indexOf(c) === -1; }))
+      .forEach(function (cat) {
+        var items = porCategoria[cat];
+        if (!items || items.length === 0) return;
+        html += '<div class="checklist-categoria">' +
+          '<div class="checklist-categoria-header"><span>' + (ETIQUETAS_CATEGORIA[cat] || cat) + '</span>' +
+          '<span class="mono" style="font-weight:400; text-transform:none;">' + items.filter(function (i) { return i.Estado === 'cargado'; }).length + '/' + items.length + '</span></div>' +
+          items.map(renderItemChecklist_).join('') +
+        '</div>';
+      });
+
+    cont.innerHTML = html;
+  }
+
+  function renderItemChecklist_(d) {
+    var acciones = '';
+    if (puede('subir_documento')) {
+      acciones += '<button class="btn btn-secundario" style="padding:5px 10px; font-size:12px;" onclick="dispararCargaArchivo(\'' + d.ID_Registro + '\', false)">' +
+        (d.Estado === 'cargado' ? 'Nueva versión' : 'Cargar') + '</button>';
+    }
+    if (d.Estado === 'cargado' && d.URL_Drive) {
+      acciones += '<a class="btn btn-texto" style="padding:5px 6px; font-size:12px;" href="' + d.URL_Drive + '" target="_blank">Ver (v' + d.Version + ')</a>';
+    }
+    if (d.Estado === 'cargado' && puede('sobrescribir_documento')) {
+      acciones += '<button class="btn btn-texto" style="padding:5px 6px; font-size:12px; color:var(--estado-critico);" onclick="dispararCargaArchivo(\'' + d.ID_Registro + '\', true)">Sobrescribir</button>';
+    }
+    if (d.Estado === 'pendiente' && puede('subir_documento')) {
+      acciones += '<button class="btn btn-texto" style="padding:5px 6px; font-size:12px;" onclick="marcarDocNoAplica(\'' + d.ID_Registro + '\')">No aplica</button>';
+    }
+
+    return '<div class="checklist-item">' +
+      pillEstadoDoc(d.Estado) +
+      '<div class="ci-nombre">' + escapeHtml(d.Nombre_Documento) + (d.Es_Personalizado ? ' <span class="pill pill-neutro" style="font-size:10px;">agregado</span>' : '') +
+        (d.Condicion_Adicional ? '<div class="ci-condicion">' + escapeHtml(d.Condicion_Adicional) + '</div>' : '') +
+      '</div>' +
+      '<div class="ci-acciones">' + acciones + '</div>' +
+    '</div>';
+  }
+
+  function dispararCargaArchivo(idRegistro, sobrescribir) {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.onchange = function () {
+      var file = input.files[0];
+      if (!file) return;
+
+      var accionPromesa = sobrescribir
+        ? confirmarAccion('Esto reemplazará el archivo cargado actualmente para este ítem. La versión anterior no quedará disponible dentro del sistema. ¿Continuar?')
+        : Promise.resolve(true);
+
+      accionPromesa.then(function (ok) {
+        if (!ok) return;
+        leerArchivoBase64(file).then(function (archivo) {
+          mostrarToast('Subiendo archivo…');
+          return llamar('subirDocumento', idRegistro, archivo.base64, archivo.mimeType, archivo.nombre, sobrescribir);
+        }).then(function (documentos) {
+          state.casoActual.documentos = documentos;
+          mostrarToast(sobrescribir ? 'Archivo sobrescrito.' : 'Documento cargado.', 'exito');
+          renderTabDocumentos();
+        }).catch(mostrarError);
+      });
+    };
+    input.click();
+  }
+
+  function marcarDocNoAplica(idRegistro) {
+    confirmarAccion('¿Marcar este ítem como "no aplica" para este caso?').then(function (ok) {
+      if (!ok) return;
+      llamar('marcarNoAplica', idRegistro, '').then(function (documentos) {
+        state.casoActual.documentos = documentos;
+        mostrarToast('Ítem marcado como no aplica.', 'exito');
+        renderTabDocumentos();
+      }).catch(mostrarError);
+    });
+  }
+
+  function abrirModalDocumentoAdicional() {
+    var fondo = document.createElement('div');
+    fondo.className = 'modal-fondo';
+    fondo.innerHTML =
+      '<div class="modal">' +
+        '<h2>Agregar ítem no listado</h2>' +
+        '<div class="campo" style="margin-bottom:10px;"><label>Nombre del documento *</label><input type="text" id="da-nombre"></div>' +
+        '<div class="campo" style="margin-bottom:10px;"><label>Categoría / carpeta destino</label>' +
+          '<select id="da-categoria">' +
+            ORDEN_CATEGORIAS.map(function (c) { return '<option value="' + c + '">' + ETIQUETAS_CATEGORIA[c] + '</option>'; }).join('') +
+          '</select></div>' +
+        '<div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">' +
+          '<button class="btn btn-secundario" onclick="cerrarModal()">Cancelar</button>' +
+          '<button class="btn btn-primario" onclick="guardarDocumentoAdicional(this)">Agregar</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(fondo);
+  }
+
+  function guardarDocumentoAdicional(boton) {
+    var nombre = document.getElementById('da-nombre').value.trim();
+    if (!nombre) return mostrarError('El nombre del documento es obligatorio.');
+    var categoria = document.getElementById('da-categoria').value;
+
+    conSpinner(boton, llamar('agregarDocumentoAdicional', state.casoActual.caso.ID_Caso, nombre, categoria)).then(function (documentos) {
+      state.casoActual.documentos = documentos;
+      cerrarModal();
+      mostrarToast('Ítem agregado al checklist.', 'exito');
+      state.tabCasoActual = 'documentos';
+      renderCasoDetalle(); // repinta encabezado (contador de documentos) + tab activo correcto
+    }).catch(mostrarError);
+  }
+</script>
+
+  <!-- ── JavaScript_Usuarios.html ── -->
+  <script>
+  function cargarUsuarios() {
+    elTopbarTitulo('Usuarios');
+    elContenido().innerHTML = '<div class="vacio">Cargando…</div>';
+    llamar('listarUsuarios').then(function (usuarios) {
+      state.usuarios = usuarios;
+      renderUsuarios();
+    }).catch(mostrarError);
+  }
+
+  function renderUsuarios() {
+    var html = '<div style="display:flex; justify-content:flex-end; margin-bottom:12px;">' +
+      '<button class="btn btn-primario" onclick="abrirModalUsuario()">+ Nuevo usuario</button>' +
+    '</div>';
+
+    html += '<div class="tarjeta" style="padding:0;"><table class="tabla"><thead><tr>' +
+      '<th>Email</th><th>Nombre</th><th>Rol</th><th>Estado</th><th></th>' +
+      '</tr></thead><tbody>' +
+      state.usuarios.map(function (u) {
+        var activo = u.Activo === true || u.Activo === 'sí' || u.Activo === 'TRUE';
+        return '<tr style="cursor:default;">' +
+          '<td>' + escapeHtml(u.Email) + '</td>' +
+          '<td>' + escapeHtml(u.Nombre) + '</td>' +
+          '<td><span class="pill pill-info">' + escapeHtml(String(u.Rol).replace('_', ' ')) + '</span></td>' +
+          '<td>' + (activo ? '<span class="pill pill-ok">Activo</span>' : '<span class="pill pill-neutro">Inactivo</span>') + '</td>' +
+          '<td style="display:flex; gap:6px;">' +
+            '<button class="btn btn-texto" style="font-size:12px;" onclick="abrirModalUsuario(\'' + u.Email + '\')">Editar</button>' +
+            (activo ? '<button class="btn btn-texto" style="font-size:12px; color:var(--estado-critico);" onclick="desactivarUsuarioUI(\'' + u.Email + '\')">Desactivar</button>' : '') +
+          '</td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+
+    elContenido().innerHTML = html;
+  }
+
+  function abrirModalUsuario(email) {
+    var u = email ? state.usuarios.filter(function (x) { return x.Email === email; })[0] : null;
+    var fondo = document.createElement('div');
+    fondo.className = 'modal-fondo';
+    fondo.innerHTML =
+      '<div class="modal">' +
+        '<h2>' + (u ? 'Editar usuario' : 'Nuevo usuario') + '</h2>' +
+        '<div class="campo" style="margin-bottom:10px;"><label>Email (cuenta Google) *</label>' +
+          '<input type="email" id="u-email" value="' + (u ? escapeHtml(u.Email) : '') + '"' + (u ? ' disabled' : '') + '></div>' +
+        '<div class="campo" style="margin-bottom:10px;"><label>Nombre</label><input type="text" id="u-nombre" value="' + (u ? escapeHtml(u.Nombre) : '') + '"></div>' +
+        '<div class="campo" style="margin-bottom:10px;"><label>Rol</label>' +
+          '<select id="u-rol">' +
+            ['administrador', 'apr', 'supervisor', 'solo_lectura'].map(function (r) {
+              return '<option value="' + r + '"' + (u && u.Rol === r ? ' selected' : '') + '>' + r.replace('_', ' ') + '</option>';
+            }).join('') +
+          '</select></div>' +
+        '<div class="campo" style="margin-bottom:10px;"><label><input type="checkbox" id="u-activo" ' +
+          (!u || u.Activo === true || u.Activo === 'sí' || u.Activo === 'TRUE' ? 'checked' : '') + ' style="width:auto; display:inline-block; margin-right:6px;">Usuario activo</label></div>' +
+        '<div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">' +
+          '<button class="btn btn-secundario" onclick="cerrarModal()">Cancelar</button>' +
+          '<button class="btn btn-primario" onclick="guardarUsuarioUI(this)">Guardar</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(fondo);
+  }
+
+  function guardarUsuarioUI(boton) {
+    var email = document.getElementById('u-email').value.trim();
+    if (!email) return mostrarError('El email es obligatorio.');
+
+    var datos = {
+      Email: email,
+      Nombre: document.getElementById('u-nombre').value.trim(),
+      Rol: document.getElementById('u-rol').value,
+      Activo: document.getElementById('u-activo').checked
+    };
+
+    conSpinner(boton, llamar('guardarUsuario', datos)).then(function (usuarios) {
+      state.usuarios = usuarios;
+      cerrarModal();
+      mostrarToast('Usuario guardado.', 'exito');
+      renderUsuarios();
+    }).catch(mostrarError);
+  }
+
+  function desactivarUsuarioUI(email) {
+    confirmarAccion('¿Desactivar a ' + email + '? Podrás reactivarlo después editándolo.').then(function (ok) {
+      if (!ok) return;
+      llamar('desactivarUsuario', email).then(function (usuarios) {
+        state.usuarios = usuarios;
+        mostrarToast('Usuario desactivado.', 'exito');
+        renderUsuarios();
+      }).catch(mostrarError);
+    });
+  }
+</script>
+
+<!--
+============================================================================
+GUIA_CONFIGURACION — léela una vez, antes de abrir este archivo por primera vez
+============================================================================
+
+Este sistema necesita 3 cosas de una sola vez, todas gratuitas dentro de
+Google Workspace / una cuenta Google normal:
+
+1) UN PROYECTO EN GOOGLE CLOUD CON DOS APIs HABILITADAS
+   - Ve a https://console.cloud.google.com/
+   - Crea un proyecto nuevo (o usa uno existente).
+   - Menú → APIs y servicios → Biblioteca → busca y habilita:
+       • Google Sheets API
+       • Google Drive API
+
+2) UN CLIENT ID DE OAuth 2.0
+   - En el mismo proyecto: APIs y servicios → Pantalla de consentimiento OAuth.
+     - Tipo de usuario: "Interno" si tienes Google Workspace (recomendado),
+       o "Externo" + agregarte a ti mismo como "usuario de prueba" si usas
+       una cuenta @gmail.com normal.
+     - Completa nombre de la app, correo de soporte, y guarda.
+   - Luego: APIs y servicios → Credenciales → Crear credenciales →
+     ID de cliente de OAuth → Tipo de aplicación: "Aplicación web".
+   - En "Orígenes de JavaScript autorizados" agrega la URL exacta donde
+     vas a alojar este archivo (ver punto 3). Ejemplos:
+       • https://tu-usuario.github.io
+       • http://localhost:8000  (si lo pruebas localmente con un servidor)
+   - Copia el "Client ID" resultante (termina en .apps.googleusercontent.com)
+     y pégalo en CONFIG.CLIENT_ID al inicio de este archivo.
+
+   IMPORTANTE: el login de Google NO funciona abriendo el archivo con
+   doble clic (protocolo file://) — necesita un origen http/https real.
+   Por eso el punto 3 es obligatorio, no opcional.
+
+3) ALOJAR ESTE ARCHIVO EN ALGÚN LUGAR CON URL PROPIA
+   La opción más simple y gratuita, igual a como tienes SST Sentinel:
+   - Crea un repositorio en GitHub (puede ser privado si tu plan lo permite,
+     o público si el contenido no es sensible — recuerda que igual toda
+     la DATA vive en tu Sheet/Drive privado, este HTML es solo la interfaz).
+   - Sube este archivo (puedes llamarlo index.html).
+   - Activa GitHub Pages: Settings → Pages → Deploy from branch → main.
+   - La URL que te entregue GitHub Pages es la que compartes con tu equipo,
+     y es la misma que debes registrar en el paso 2 como origen autorizado.
+
+4) LA PRIMERA VEZ QUE LO ABRES
+   - Verás "Conectar con Google" → inicia sesión con la cuenta que va a ser
+     dueña de la planilla y la carpeta (puede ser tu cuenta, o una cuenta
+     dedicada del equipo, como hiciste con siniestroszener@gmail.com en
+     SST Sentinel).
+   - Como CONFIG.SPREADSHEET_ID y CONFIG.ROOT_FOLDER_ID están vacíos, verás
+     la pantalla "Configuración inicial" — un clic crea las 7 hojas, siembra
+     el catálogo de 43 documentos, y crea la carpeta raíz en Drive.
+   - Copia los dos IDs que te muestra, pégalos en CONFIG al inicio de este
+     archivo, guarda, y vuelve a subirlo a donde lo estés alojando (paso 3).
+   - Desde ese momento, todos los que abran esa misma URL comparten los
+     mismos datos en vivo — no hay nada guardado por separado en cada PC.
+
+SOBRE LOS ROLES Y LA SEGURIDAD (léelo, es importante)
+   Como todos entran con la MISMA cuenta de Google (o cuentas con acceso a
+   la misma planilla/carpeta), el sistema pide "¿Quién eres?" la primera
+   vez en cada equipo y lo recuerda ahí. Esa identificación NO está
+   protegida por contraseña — es igual de confiable que el resto de tus
+   herramientas internas: sirve para dejar registro de quién hizo qué
+   (auditoría) y para mostrar/ocultar botones según el rol, pero cualquier
+   persona con acceso a la cuenta de Google podría, en teoría, elegirse
+   a sí misma como "administrador". El límite de seguridad real es quién
+   tiene la contraseña de la cuenta de Google que da acceso a la planilla
+   y la carpeta — igual que en SST Sentinel.
+
+SOBRE EL OCR
+   Usa la conversión nativa de Drive (subir el PDF pidiendo que se
+   convierta a Google Doc con OCR activado) — no hay IA de por medio, es
+   reconocimiento óptico de caracteres estándar de Google. Busca los
+   rótulos fijos del formato ZN-FT-SST-050 línea por línea. Cálibralo con
+   2-3 PDFs reales antes de confiar en él a ciegas — el formulario siempre
+   queda editable.
+-->
+</body>
+</html>
